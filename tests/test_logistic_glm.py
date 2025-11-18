@@ -42,7 +42,7 @@ def test_logistic_confs():
     assert conf_int.shape == (p+1, 2)
     assert np.all(conf_int[:,1] >= conf_int[:,0])
     
-def test_logistic_confs_y_var():
+def test_logistic_confs_y_varw():
     glm = GLM(family="logistic", l1_penalty=lam, **solve_kwargs).fit(X, y)
-    conf_int = glm.conf_int(X, y_var = np.zeros(n))
+    conf_int = glm.conf_int(X, Y_var = np.zeros(n))
     assert np.all((conf_int[:,1] - conf_int[:,0]) == 0)

@@ -2,7 +2,7 @@ import numpy as np
 import regreg.api as rr
 from scipy.stats import norm
 from scipy.special import expit
-from .losses import logistic_loss_smooth
+from .losses import logistic_loss_smooth, least_squares_loss_smooth
 
 class GLM:
     """
@@ -26,8 +26,10 @@ class GLM:
         self.tol = tol
         self.intercept = intercept
 
-        self.beta_hat_ = None
-        self.problem_ = None        
+        self.beta_ = None
+        self.problem_ = None
+        self.loss_ = None
+        self.residuals_ = None
 
     def fit(self, X, y):
         """
@@ -35,28 +37,32 @@ class GLM:
             Design matrix
         y : array-like, shape (n_samples,)
         """
-        self.n_, self.p_ = X.shape
+        n = X.shape[0]
         if self.intercept:
-            X = np.hstack([np.ones((self.n_, 1)), X])
+            self._solve_problem(np.hstack([np.ones((n, 1)), X]), y)
+        else:
+            self._solve_problem(X, y)
 
-        self._solve_problem(X, y)
+        self.residuals_ = y - self.predict(X)
 
         return self
 
     def _solve_problem(self, X, y):
         """Construct regreg loss + penalties."""
-        
+
         if self.family == "logistic":
-            loss = logistic_loss_smooth(X, y)
+            self.loss_ = logistic_loss_smooth(X, y)
+        elif self.family == "linear":
+            self.loss_ = least_squares_loss_smooth(X, y)
         else:
             raise ValueError("Unsupported family")
 
         if self.l1_penalty is not None:
             assert self.l1_penalty >= 0, "l1_penalty must be non-negative"
             if self.intercept:
-                lam = rr.weighted_l1norm([0] + [1]*self.p_, lagrange=self.l1_penalty)  # to not penalize intercept
+                lam = rr.weighted_l1norm([0] + [1]*(X.shape[1]-1), lagrange=self.l1_penalty)  # to not penalize intercept
             else:
-                lam = rr.weighted_l1norm([1]*self.p_, lagrange=self.l1_penalty)
+                lam = rr.weighted_l1norm([1]*X.shape[1], lagrange=self.l1_penalty)
         else:
             lam = rr.weighted_l1norm([1]*X.shape[1], lagrange=0)  # no penalty
 
@@ -65,51 +71,70 @@ class GLM:
         else:
             quad = rr.identity_quadratic(0, 0, 0, 0)  # no penalty
 
-        problem = rr.simple_problem(loss, lam)
+        problem = rr.simple_problem(self.loss_, lam)
 
         self.beta_ = problem.solve(quad, min_its=self.min_its, tol=self.tol)
+
+    def predict(self, X):
+        """Predicts new outcomes"""
+        assert self.loss_ is not None, "Model must be fit before it can predict."
+        if self.intercept:
+            X = np.hstack([np.ones((X.shape[0], 1)), X])
+        return self.loss_.predict_(X, self.beta_)
 
     def coef(self):
         """Return estimated coefficients including intercept."""
         return self.beta_
+    
+    def get_var(self, X, Y, error_model=None):
+        """Estimates the outcome variances using the working model."""
+        assert self.loss_ is not None, "Model must be fit before it can predict."
+        if self.intercept:
+            X = np.hstack([np.ones((X.shape[0], 1)), X])
+
+        var_est = self.loss_.get_var_(X, self.beta_, Y)
+        if error_model == "homogeneous":
+            n, p = X.shape
+            return np.ones_like(var_est) * (np.mean(var_est) / (n - p))
+        elif error_model == "heterogeneous" or error_model is None:
+            return var_est
+        else:
+            raise ValueError(f"error_model {error_model} not recognized.")
 
     def active(self):
         """Return indices of nonzero coefficients (excluding intercept)."""
         if self.beta_ is None:
             raise ValueError("Model not fitted yet")
-        elif self.intercept:
+
+        if self.intercept:
             return np.where(self.beta_[1:] != 0)[0]
         else:
             return np.where(self.beta_ != 0)[0]
 
-    def se(self, X, y_var=None):
+    def se(self, X, Y_var=None):
         """Compute approximate standard errors using sandwich formula."""
         if self.beta_ is None:
             raise ValueError("Model not fitted yet")
 
+        if Y_var is not None and isinstance(Y_var, (float)):
+            W = np.diag(np.ones(X.shape[0]) * Y_var)
+        elif Y_var is not None:
+            assert len(Y_var) == X.shape[0]
+            W = np.diag(Y_var)
+        else:
+            W = np.diag(self.residuals_ ** 2)  # sandwich model estimate
+
         if self.intercept:
             X = np.hstack([np.ones((X.shape[0], 1)), X])
-
-        eta = X @ self.beta_
-        mu = expit(eta)  # to ovoid numerical overflow
-        if y_var is not None and isinstance(y_var, (float)):
-            W = np.ones(self.n_) * y_var
-        elif y_var is not None:
-            assert len(y_var) == len(mu)
-            W = y_var
-        else:
-            W = mu * (1 - mu)  # working model variance estimate
-
-        Sigma = (X.T * W) @ X / self.n_
-        Y_var_est = mu * (1 - mu)
-        H_est_inv = np.linalg.inv((X.T * Y_var_est) @ X / self.n_)
-        cov_beta_hat = H_est_inv @ Sigma @ H_est_inv / self.n_
+        Sigma = X.T @ W @ X / X.shape[0]
+        H_est_inv = np.linalg.inv(self.loss_.get_hessian(X, self.beta_))
+        cov_beta_hat = H_est_inv @ Sigma @ H_est_inv
         se = np.sqrt(np.diag(cov_beta_hat))
 
         return se
 
-    def conf_int(self, X, y_var=None, level=0.95):
-        se = self.se(X, y_var)
+    def conf_int(self, X, Y_var=None, level=0.95, var_scale=1.0):
+        se = self.se(X, Y_var) * np.sqrt(var_scale) / np.sqrt(X.shape[0])
         q = norm.ppf(1 - (1 - level) / 2, loc=0, scale=1)
         conf_int = np.vstack([self.beta_ - q * se, self.beta_ + q * se]).T  
         return conf_int

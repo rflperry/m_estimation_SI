@@ -11,6 +11,9 @@ venv.bak/
 # Byte-compiled / optimized / DLL files
 __pycache__/
 
+# logs
+logs/
+
 # Distribution / packaging
 .Python
 build/
@@ -29,6 +32,6 @@ wheels/
 .installed.cfg
 *.egg
 MANIFEST
-
+selectinf/
 
 .pytest_cache/

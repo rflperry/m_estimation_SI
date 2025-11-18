@@ -3,6 +3,7 @@ from regreg.smooth import smooth_atom
 from scipy.special import expit
 
 class logistic_loss_smooth(smooth_atom):
+
     def __init__(self, X, y):
         self.X = X
         self.y = y
@@ -33,3 +34,51 @@ class logistic_loss_smooth(smooth_atom):
             return f, g
         else:
             raise ValueError("mode must be 'func', 'grad', or 'both'")
+
+    def predict_(self, X, beta):
+        return expit(X @ beta)
+   
+    def get_hessian(self, X, beta):
+        mu = self.predict_(X, beta)
+        W = np.diag(mu * (1 - mu))
+        return X.T @ W @ X / X.shape[0]
+
+    def get_var_(self, X, beta, y=None):
+        mu = self.predict_(X, beta)
+        return mu * (1 - mu)
+
+
+class least_squares_loss_smooth(smooth_atom):
+
+    def __init__(self, X, y):
+        self.X = X
+        self.y = y
+        _, p = X.shape
+
+        # Call parent constructor with dimension p
+        super().__init__(shape=(p,))
+
+    def smooth_objective(self, beta, mode='both', check_feasibility=None):
+        residuals = self.y - self.X @ beta
+        f = 0.5 * np.sum(residuals ** 2)
+
+        if mode == 'func':
+            return f
+        elif mode == 'grad':
+            g = -self.X.T @ residuals
+            return g
+        elif mode == 'both':
+            g = -self.X.T @ residuals
+            return f, g
+        else:
+            raise ValueError("mode must be 'func', 'grad', or 'both'")
+        
+    def predict_(self, X, beta):
+        return X @ beta
+    
+    def get_hessian(self, X, beta=None):
+        return X.T @ X / X.shape[0]
+    
+    def get_var_(self, X, beta, y=None):
+        residuals = y - X @ beta
+        return residuals ** 2

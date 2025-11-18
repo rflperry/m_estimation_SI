@@ -22,6 +22,8 @@ Then, you can run
 pip install .
 ```
 
+To run the randomized conditional selective inference approach of Huang et al. (2025), locally install `github.com/yiling-h/PoSI-GroupLASSO`. You may need to replace `np.bool` with `bool`.
+
 ## Develop
 
 Set up a development environment as above, but furthermore install development packages
