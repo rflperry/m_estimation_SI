@@ -59,16 +59,17 @@ class least_squares_loss_smooth(smooth_atom):
         super().__init__(shape=(p,))
 
     def smooth_objective(self, beta, mode='both', check_feasibility=None):
+        n = self.X.shape[0]
         residuals = self.y - self.X @ beta
-        f = 0.5 * np.sum(residuals ** 2)
+        f = 0.5 * np.mean(residuals ** 2)
 
         if mode == 'func':
             return f
         elif mode == 'grad':
-            g = -self.X.T @ residuals
+            g = -self.X.T @ residuals / n
             return g
         elif mode == 'both':
-            g = -self.X.T @ residuals
+            g = -self.X.T @ residuals / n
             return f, g
         else:
             raise ValueError("mode must be 'func', 'grad', or 'both'")

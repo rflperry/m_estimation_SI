@@ -8,7 +8,6 @@ import pandas as pd
 from joblib import Parallel, delayed
 from m_estimation_SI.simulation import logistic_group_instance
 
-import regreg.api as rr
 from selectinf.group_lasso_query import group_lasso
 from selectinf.base import selected_targets
 import itertools
@@ -18,6 +17,7 @@ HEADER = [
     "n",
     "p",
     "sparsity",
+    "dispersion",
     "method",
     "sum_covers",
     "sum_rejects",
@@ -30,12 +30,18 @@ HEADER = [
 ]
 OUT_PATH = "results"
 
+
 def selection_accuracy(reference, estimate):
     """Compute TPR and FDR of estimate compared to reference model."""
-    reference_set = (
-        set(map(int, reference.split(","))) if reference is not None else set()
-    )
-    estimate_set = set(map(int, estimate.split(","))) if estimate is not None else set()
+    if reference is None or reference == "":
+        reference_set = set()
+    else:
+        reference_set = set(map(int, reference.split(",")))
+
+    if estimate is None or estimate == "":
+        estimate_set = set()
+    else:
+        estimate_set = set(map(int, estimate.split(",")))
 
     true_positives = len(reference_set & estimate_set)
     false_positives = len(estimate_set - reference_set)
@@ -64,7 +70,7 @@ def classic_si(family, X, Y, mu, penalty, level, intercept):
         X_sel = X[:, sel]
         model = GLM(family=family, intercept=intercept).fit(X_sel, Y)
         beta_est = model.beta_
-        conf_int = model.conf_int(X_sel, Y_var=None, level=level)
+        conf_int = model.conf_int(X_sel, level=level)
         length = conf_int[:, 1] - conf_int[:, 0]
         beta_sel = GLM(family=family, intercept=intercept).fit(X_sel, mu).beta_
         cover = (beta_sel >= conf_int[:, 0]) & (beta_sel <= conf_int[:, 1])
@@ -91,16 +97,13 @@ def sample_splitting_si(family, X, Y, mu, Y_var, penalty, level, gamma, intercep
         .active()
     )
 
-    if Y_var is not None:
-        Y_var = Y_var[test_indices]
-
     if len(sel) == 0:
         return [0, 0, 0, 0, 0, None]
     else:
         X_sel = X_test[:, sel]
         model = GLM(family=family, intercept=intercept).fit(X_sel, Y_test)
         beta_est = model.beta_
-        conf_int = model.conf_int(X_sel, Y_var=None, level=level)
+        conf_int = model.conf_int(X_sel, level=level)
         length = conf_int[:, 1] - conf_int[:, 0]
         beta_sel = (
             GLM(family=family, intercept=intercept).fit(X_sel, mu[test_indices]).beta_
@@ -117,18 +120,15 @@ def sample_splitting_si(family, X, Y, mu, Y_var, penalty, level, gamma, intercep
         ]
 
 
-def thin_outcomes_si(family, X, Y, mu, Y_var, penalty, level, gamma, W, intercept, error_model):
+def thin_outcomes_si(
+    family, X, Y, mu, Y_var, penalty, level, gamma, W, intercept, error_model
+):
 
     if Y_var is not None:
         W *= np.sqrt(Y_var)
     elif X.shape[0] > X.shape[1] + 1:  # n > p
         Y_var_noise = (
-            GLM(
-                family=family,
-                intercept=True
-            )
-            .fit(X, Y)
-            .get_var(X, Y, error_model)
+            GLM(family=family, intercept=True).fit(X, Y).get_var(X, Y, error_model)
         )
 
         W *= np.sqrt(Y_var_noise)
@@ -158,9 +158,7 @@ def thin_outcomes_si(family, X, Y, mu, Y_var, penalty, level, gamma, W, intercep
         model = GLM(family=family, intercept=intercept).fit(X_sel, Y - W / gamma)
         beta_est = model.beta_
         # model.residuals_ = Y - model.predict(X_sel) # non-noisy residuals for sandwich SE
-        conf_int = model.conf_int(
-            X_sel, Y_var=None, level=level, var_scale=1  # + 1 / gamma**2
-        )  # correct for noisy penalty
+        conf_int = model.conf_int(X_sel, level=level, var_scale=1)  # + 1 / gamma**2
         length = conf_int[:, 1] - conf_int[:, 0]
         beta_sel = GLM(family=family, intercept=intercept).fit(X_sel, mu).beta_
         cover = (beta_sel >= conf_int[:, 0]) & (beta_sel <= conf_int[:, 1])
@@ -175,7 +173,9 @@ def thin_outcomes_si(family, X, Y, mu, Y_var, penalty, level, gamma, W, intercep
         ]
 
 
-def thin_gradient_si(family, X, Y, mu, Y_var, penalty, level, gamma, W, intercept, error_model):
+def thin_gradient_si(
+    family, X, Y, mu, Y_var, penalty, level, gamma, W, intercept, error_model
+):
 
     if intercept:
         # Because X is used to form the penalty, we need to include intercept here
@@ -187,12 +187,7 @@ def thin_gradient_si(family, X, Y, mu, Y_var, penalty, level, gamma, W, intercep
         W *= np.sqrt(Y_var)
     elif n > p:  # n > p
         Y_var_noise = (
-            GLM(
-                family=family,
-                intercept=False
-            )
-            .fit(X, Y)
-            .get_var(X, Y, error_model)
+            GLM(family=family, intercept=False).fit(X, Y).get_var(X, Y, error_model)
         )
 
         W *= np.sqrt(Y_var_noise)
@@ -214,7 +209,7 @@ def thin_gradient_si(family, X, Y, mu, Y_var, penalty, level, gamma, W, intercep
             family=family,
             intercept=False,
             l1_penalty=penalty,
-            affine_penalty=gamma * X.T @ W / np.sqrt(n),
+            affine_penalty=gamma * X.T @ W / n,
         )
         .fit(X, Y)
         .active()
@@ -227,11 +222,11 @@ def thin_gradient_si(family, X, Y, mu, Y_var, penalty, level, gamma, W, intercep
     model = GLM(
         family=family,
         intercept=False,
-        affine_penalty=-X_sel.T @ W / gamma / np.sqrt(X.shape[0]),
+        affine_penalty=-X_sel.T @ W / gamma / n,
     ).fit(X_sel, Y)
     beta_est = model.beta_
     conf_int = model.conf_int(
-        X_sel, Y_var=None, level=level, var_scale=1 + 1 / gamma**2
+        X_sel, level=level, var_scale=1 + 1 / gamma**2
     )  # correct for noisy penalty
     length = conf_int[:, 1] - conf_int[:, 0]
     beta_sel = GLM(family=family, intercept=False).fit(X_sel, mu).beta_
@@ -250,83 +245,96 @@ def thin_gradient_si(family, X, Y, mu, Y_var, penalty, level, gamma, W, intercep
 def randomized_conditional(
     family, X, Y, mu, Y_var, penalty, level, gamma, W, intercept, error_model
 ):
-    """Code adapted from github.com/yiling-h/PoSI-GroupLASSO"""
+    """
+    Code adapted from github.com/yiling-h/PoSI-GroupLASSO
+
+    Note, their code uses the typical regreg loss scaling without 1/n.
+    Thus, we scale W and the penalty by n accordingly.
+    """
 
     if intercept:
         X = np.hstack([np.ones((X.shape[0], 1)), X])
     n, p = X.shape
 
-    if family == "linear":        
-        if Y_var is not None:
-            W *= np.sqrt(Y_var)
-            hess = X.T @ np.diag(Y_var) @ X * gamma
-        elif n > p:  # n > p
-            Y_var_noise = (
-                GLM(
-                    family=family,
-                    intercept=False
-                )
-                .fit(X, Y)
-                .get_var(X, Y, error_model)
-            )
+    if Y_var is not None:
+        W *= np.sqrt(Y_var)
+        dispersion = np.mean(Y_var)
+        hess = X.T @ np.diag(Y_var) @ X * gamma
+    elif n > p:  # n > p
+        glm = GLM(family=family, intercept=False).fit(X, Y)
+        Y_var_noise = glm.get_var(X, Y, error_model)
+        W *= np.sqrt(Y_var_noise)
+        dispersion = np.mean(glm.get_var(X, Y, "homogeneous"))
+        hess = X.T @ np.diag(Y_var_noise) @ X * gamma
+    else:  # p > n
+        glm = GLM(
+            family=family,
+            intercept=False,
+            l1_penalty=penalty,
+        ).fit(X, Y)
+        Y_var_noise = glm.get_var(X, Y, error_model)
+        W *= np.sqrt(Y_var_noise)
+        dispersion = np.mean(glm.get_var(X, Y, "homogeneous"))
+        hess = X.T @ np.diag(Y_var_noise) @ X * gamma
 
-            W *= np.sqrt(Y_var_noise)
-            hess = X.T @ np.diag(Y_var_noise) @ X * gamma
-        else:  # p > n
-            Y_var_noise = (
-                GLM(
-                    family=family,
-                    intercept=False,
-                    l1_penalty=penalty,
-                )
-                .fit(X, Y)
-                .get_var(X, Y, error_model)
-            )
+    groups = np.arange(p)
+    weights = dict([(i, penalty * n) for i in np.unique(groups)])
+    perturb = -gamma * X.T @ W  # they subtract the noise
 
-            W *= np.sqrt(Y_var_noise)
-            hess = X.T @ np.diag(Y_var_noise) @ X * gamma
-
-        groups = np.arange(p)
-        weights = dict([(i, penalty) for i in np.unique(groups)])
-        perturb = -gamma * X.T @ W / np.sqrt(n)  # they subtract the noise
-
-        # By setting useJacobian=False, we
+    if family == "linear":
         conv = group_lasso.gaussian(
-            X=X, Y=Y, groups=groups, weights=weights, perturb=perturb, useJacobian=False, cov_rand=hess
+            X=X,
+            Y=Y,
+            groups=groups,
+            weights=weights,
+            perturb=perturb,
+            useJacobian=False,
+            cov_rand=hess,
         )
-        # cov_rand=hess)
-        conv.useJacobian = True  # enabling Jacobian during initialization alters selection, this agrees with thin_gradients
-        signs, _ = conv.fit()
-        sel = np.where(signs != 0)[0]
-
-        if len(sel) == 0:
-            return [0, 0, 0, 0, 0, None]
-
-        conv.setup_inference(dispersion=1)
-
-        target_spec = selected_targets(
-            conv.loglike, conv.observed_soln, dispersion=1
+    elif family == "logistic":
+        conv = group_lasso.logistic(
+            X=X,
+            successes=Y,
+            groups=groups,
+            weights=weights,
+            perturb=perturb,
+            useJacobian=False,
+            cov_rand=hess,
         )
-
-        result, _ = conv.inference(target_spec, method="selective_MLE", level=level)
-
-        beta_est = result["unbiased"]
-        conf_int = np.asarray(result[["lower_confidence", "upper_confidence"]])
-        beta_sel = GLM(family=family, intercept=False).fit(X[:, sel], mu).beta_
-
-        length = conf_int[:, 1] - conf_int[:, 0]
-        cover = (beta_sel >= conf_int[:, 0]) & (beta_sel <= conf_int[:, 1])
-        rejects = (0 < conf_int[:, 0]) | (0 > conf_int[:, 1])
-        return [
-            sum(cover),
-            sum(rejects),
-            sum(np.abs(beta_est - beta_sel)),
-            len(sel) + intercept,
-            sum(length),
-            ",".join(map(str, sel)),
-        ]
+        dispersion = 1
     else:
         raise ValueError(f"Family {family} not supported")
+
+    conv.useJacobian = True  # enabling Jacobian during initialization alters selection, this agrees with thin_gradients
+    signs, _ = conv.fit()
+    sel = np.where(signs != 0)[0]
+
+    if len(sel) == 0:
+        return [0, 0, 0, 0, 0, None]
+
+    conv.setup_inference(dispersion=dispersion)
+
+    target_spec = selected_targets(
+        conv.loglike, conv.observed_soln, dispersion=dispersion
+    )
+
+    result, _ = conv.inference(target_spec, method="selective_MLE", level=level)
+
+    beta_est = result["unbiased"]
+    conf_int = np.asarray(result[["lower_confidence", "upper_confidence"]])
+    beta_sel = GLM(family=family, intercept=False).fit(X[:, sel], mu).beta_
+
+    length = conf_int[:, 1] - conf_int[:, 0]
+    cover = (beta_sel >= conf_int[:, 0]) & (beta_sel <= conf_int[:, 1])
+    rejects = (0 < conf_int[:, 0]) | (0 > conf_int[:, 1])
+    return [
+        sum(cover),
+        sum(rejects),
+        sum(np.abs(beta_est - beta_sel)),
+        len(sel) + intercept,
+        sum(length),
+        ",".join(map(str, sel)),
+    ]
 
 
 def run_simulation(
@@ -335,15 +343,16 @@ def run_simulation(
     family,
     gamma=1,
     lam=1,
-    signal_frac=0.1,
+    # signal_frac=0.1,
     sparsity=3,
     rho=0.5,
     level=0.90,
-    var_inflation=1.0,
+    dispersion=1.0,
     verbose=False,
     true_noise_var=False,
     intercept=False,
-    error_model=None
+    error_model=None,
+    misspecified=False,
 ):
     if family == "logistic":
         inst = logistic_group_instance
@@ -352,7 +361,7 @@ def run_simulation(
     else:
         raise ValueError("Unsupported family")
 
-    signal = 1 # np.sqrt(signal_frac * 2 * np.log(p))
+    signal = 1  # np.sqrt(signal_frac * 2 * np.log(p))
     if sparsity < 1:
         sparsity = int(sparsity * p)
     else:
@@ -379,12 +388,26 @@ def run_simulation(
         mu = 1 / (1 + np.exp(-eta))
         Y = np.random.binomial(1, mu, size=n)
         if true_noise_var:
-            Y_var = mu * (1 - mu) * var_inflation
+            Y_var = mu * (1 - mu) * dispersion
     elif family == "linear":
         mu = X @ beta_true
-        Y = np.random.normal(mu, np.sqrt(var_inflation), size=n)
-        if true_noise_var:
-            Y_var = np.ones(X.shape[0]) * var_inflation
+        if error_model == "clustered":
+            # num_clusters = 10
+            # cluster_size = n // num_clusters
+            # clusters = np.repeat(np.arange(num_clusters), cluster_size)
+            # clusters = np.hstack(
+            #     [clusters, np.random.choice(num_clusters, n - len(clusters))]
+            # )
+            # cluster_effects = np.random.normal(0, np.sqrt(dispersion), size=num_clusters)
+            # Y = mu + cluster_effects[clusters] + np.random.normal(0, 1, size=n)
+            raise NotImplementedError("Clustered errors not implemented yet")
+        else:
+            if misspecified:
+                Y = mu + np.random.laplace(loc=0, scale=np.sqrt(dispersion / 2), size=n)
+            else:
+                Y = np.random.normal(mu, np.sqrt(dispersion), size=n)
+            if true_noise_var:
+                Y_var = np.ones(X.shape[0]) * dispersion
     else:
         raise ValueError("Unsupported family")
 
@@ -397,7 +420,7 @@ def run_simulation(
     # ----- Classical -----
     try:
         results["classic"] = classic_si(
-            family, X, Y, mu, penalty, level, intercept
+            family, X.copy(), Y, mu, penalty, level, intercept
         )
         TPR, FDR = selection_accuracy(
             ",".join(map(str, np.where(beta_true != 0)[0])), results["classic"][-1]
@@ -410,11 +433,21 @@ def run_simulation(
     # ----- Sample splitting -----
     try:
         results["sample_splitting"] = sample_splitting_si(
-            family, X, Y, mu, Y_var, penalty, level, gamma, intercept
+            family,
+            X.copy(),
+            Y,
+            mu,
+            Y_var,
+            np.sqrt(1 + gamma) * penalty,
+            level,
+            gamma,
+            intercept,
         )
         if results["classic"][-1] is not None:
             TPR, FDR = selection_accuracy(
-                results["classic"][-3], results["sample_splitting"][-1]
+                # results["classic"][-3]
+                ",".join(map(str, np.where(beta_true != 0)[0])),
+                results["sample_splitting"][-1],
             )
             results["sample_splitting"] += [TPR, FDR]
         else:
@@ -427,11 +460,23 @@ def run_simulation(
     W = np.random.normal(0, 1, size=n)
     try:
         results["thin_outcomes"] = thin_outcomes_si(
-            family, X, Y, mu, Y_var, penalty, level, gamma, W, intercept, error_model
+            family,
+            X.copy(),
+            Y,
+            mu,
+            Y_var,
+            np.sqrt(1 + gamma) * penalty,
+            level,
+            gamma,
+            W.copy(),
+            intercept,
+            error_model,
         )
         if results["classic"][-1] is not None:
             TPR, FDR = selection_accuracy(
-                results["classic"][-3], results["thin_outcomes"][-1]
+                # results["classic"][-3]
+                ",".join(map(str, np.where(beta_true != 0)[0])),
+                results["thin_outcomes"][-1],
             )
             results["thin_outcomes"] += [TPR, FDR]
         else:
@@ -443,11 +488,23 @@ def run_simulation(
     # ----- Thinning gradient -----
     try:
         results["thin_gradient"] = thin_gradient_si(
-            family, X, Y, mu, Y_var, penalty, level, gamma, W, intercept, error_model
+            family,
+            X.copy(),
+            Y,
+            mu,
+            Y_var,
+            np.sqrt(1 + gamma) * penalty,
+            level,
+            gamma,
+            W.copy(),
+            intercept,
+            error_model,
         )
         if results["classic"][-1] is not None:
             TPR, FDR = selection_accuracy(
-                results["classic"][-3], results["thin_gradient"][-1]
+                # results["classic"][-3]
+                ",".join(map(str, np.where(beta_true != 0)[0])),
+                results["thin_gradient"][-1],
             )
             results["thin_gradient"] += [TPR, FDR]
         else:
@@ -459,10 +516,24 @@ def run_simulation(
     # ----- Randomized Conditional (Huang 2025) -----
     try:
         results["rsc"] = randomized_conditional(
-            family, X, Y, mu, Y_var, penalty, level, gamma, W, intercept, error_model
+            family,
+            X,
+            Y,
+            mu,
+            Y_var,
+            np.sqrt(1 + gamma) * penalty,
+            level,
+            gamma,
+            W.copy(),
+            intercept,
+            error_model,
         )
         if results["classic"][-1] is not None:
-            TPR, FDR = selection_accuracy(results["classic"][-3], results["rsc"][-1])
+            TPR, FDR = selection_accuracy(
+                # results["classic"][-3]
+                ",".join(map(str, np.where(beta_true != 0)[0])),
+                results["rsc"][-1],
+            )
             results["rsc"] += [TPR, FDR]
         else:
             results["rsc"] += [None, None]
@@ -474,8 +545,6 @@ def run_simulation(
 
 
 # %%
-
-
 def main(args):
     # encode hyperparameters into a filename
     print(datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
@@ -483,16 +552,17 @@ def main(args):
     tag = (
         f"p={','.join(map(str,args.p))}_level={args.level}_n={','.join(map(str,args.n))}"
         f"_reps={args.n_reps}_gamma={args.gamma}_s={','.join(map(str,args.sparsity))}"
-        f"_lam={args.lam}_fam={args.family}_errors={args.error_model}_true_noise_var={args.true_noise_var}"
+        f"_lam={args.lam}_fam={args.family}_errors={args.error_model}_mis={args.misspecified}"
+        f"_dispersion={','.join(map(str,args.dispersion))}_true_noise_var={args.true_noise_var}"
     )
     script_name = os.path.splitext(os.path.basename(__file__))[0]
     outfile = os.path.join(OUT_PATH, f"{script_name}_{tag}.csv")
     os.makedirs(os.path.dirname(outfile), exist_ok=True)
 
     first_write = True
-    grid = list(itertools.product(args.n, args.p, args.sparsity))
-    for n, p, sparsity in grid:
-        print(f"Running: n={n}, p={p}, sparsity={sparsity}")
+    grid = list(itertools.product(args.n, args.p, args.sparsity, args.dispersion))
+    for n, p, sparsity, dispersion in grid:
+        print(f"Running: n={n}, p={p}, sparsity={sparsity}, dispersion={dispersion}")
         results = Parallel(n_jobs=args.n_jobs, verbose=0)(
             delayed(run_simulation)(
                 n=n,
@@ -502,10 +572,11 @@ def main(args):
                 sparsity=sparsity,
                 level=args.level,
                 lam=args.lam,
-                var_inflation=args.var_inflation,
+                dispersion=dispersion,
                 true_noise_var=args.true_noise_var,
                 intercept=args.intercept,
-                error_model=args.error_model
+                error_model=args.error_model,
+                misspecified=args.misspecified,
             )
             for _ in range(args.n_reps)
         )
@@ -518,7 +589,14 @@ def main(args):
             try:
                 for method, r in res.items():
                     df = pd.DataFrame(
-                        [dict(zip(HEADER, [rep, n, p, sparsity, method] + r))]
+                        [
+                            dict(
+                                zip(
+                                    HEADER,
+                                    [rep, n, p, sparsity, dispersion, method] + r,
+                                )
+                            )
+                        ]
                     )
                     if first_write:
                         df.to_csv(outfile, mode="w", header=True, index=False)
@@ -541,8 +619,9 @@ if __name__ == "__main__":
     parser.add_argument("--n_jobs", type=int, default=1)
     parser.add_argument("--family", type=str)
     parser.add_argument("--error_model", default=None, type=str)
-    parser.add_argument("--var_inflation", type=int, default=1)
+    parser.add_argument("--dispersion", type=int, default=[1], nargs="+")
     parser.add_argument("--verbose", default=False, action="store_true")
+    parser.add_argument("--misspecified", default=False, action="store_true")
     parser.add_argument("--intercept", default=False, action="store_true")
     parser.add_argument("--true_noise_var", default=False, action="store_true")
     parser.add_argument("--debug", default=False, action="store_true")

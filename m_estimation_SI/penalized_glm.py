@@ -94,8 +94,9 @@ class GLM:
 
         var_est = self.loss_.get_var_(X, self.beta_, Y)
         if error_model == "homogeneous":
-            n, p = X.shape
-            return np.ones_like(var_est) * (np.mean(var_est) / (n - p))
+            n, _ = X.shape
+            pdim = np.sum(self.beta_ != 0)
+            return np.ones(n) * np.sum(var_est) / (n - pdim)
         elif error_model == "heterogeneous" or error_model is None:
             return var_est
         else:
@@ -111,30 +112,25 @@ class GLM:
         else:
             return np.where(self.beta_ != 0)[0]
 
-    def se(self, X, Y_var=None):
+    def se(self, X):
         """Compute approximate standard errors using sandwich formula."""
         if self.beta_ is None:
             raise ValueError("Model not fitted yet")
 
-        if Y_var is not None and isinstance(Y_var, (float)):
-            W = np.diag(np.ones(X.shape[0]) * Y_var)
-        elif Y_var is not None:
-            assert len(Y_var) == X.shape[0]
-            W = np.diag(Y_var)
-        else:
-            W = np.diag(self.residuals_ ** 2)  # sandwich model estimate
+        W = np.diag(self.residuals_ ** 2)  # sandwich model estimate
 
         if self.intercept:
             X = np.hstack([np.ones((X.shape[0], 1)), X])
-        Sigma = X.T @ W @ X / X.shape[0]
+
+        Sigma = X.T @ W @ X / (X.shape[0] - X.shape[1])
         H_est_inv = np.linalg.inv(self.loss_.get_hessian(X, self.beta_))
         cov_beta_hat = H_est_inv @ Sigma @ H_est_inv
         se = np.sqrt(np.diag(cov_beta_hat))
 
         return se
 
-    def conf_int(self, X, Y_var=None, level=0.95, var_scale=1.0):
-        se = self.se(X, Y_var) * np.sqrt(var_scale) / np.sqrt(X.shape[0])
+    def conf_int(self, X, level=0.95, var_scale=1.0):
+        se = self.se(X) * np.sqrt(var_scale) / np.sqrt(X.shape[0])
         q = norm.ppf(1 - (1 - level) / 2, loc=0, scale=1)
         conf_int = np.vstack([self.beta_ - q * se, self.beta_ + q * se]).T  
         return conf_int

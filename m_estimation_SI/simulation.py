@@ -142,6 +142,7 @@ def logistic_group_instance(n=100, p=200, sgroup=7,
             # X_indi_raw = X_indi
             # ----SCALE----
             scaling = X_indi.std(0) * np.sqrt(n)
+            # scaling = np.sqrt(n)
             X_indi /= scaling[None, :]
 
     beta = np.zeros(p)
@@ -191,8 +192,10 @@ def logistic_group_instance(n=100, p=200, sgroup=7,
             # if we need original X, uncomment the following line
             # X_raw = X
             # ----SCALE----
-            scaling = X.std(0) * np.sqrt(n)
-            X /= scaling[None, :]
+            # scaling = X.std(0) * np.sqrt(n)
+            # X /= scaling[None, :]
+            scaling = np.sqrt(n)
+            X /= scaling
             beta *= np.sqrt(n)
             sigmaX = sigmaX / np.multiply.outer(scaling, scaling)
     else:
@@ -208,8 +211,10 @@ def logistic_group_instance(n=100, p=200, sgroup=7,
             # if we need original X, uncomment the following line
             # X_raw = X
             # ----SCALE----
-            scaling = X.std(0) * np.sqrt(n)
-            X /= scaling[None, :]
+            # scaling = X.std(0) * np.sqrt(n)
+            # X /= scaling[None, :]
+            scaling = np.sqrt(n)
+            X /= scaling
             beta *= np.sqrt(n)
             sigmaX = sigmaX / np.multiply.outer(scaling, scaling)
 
