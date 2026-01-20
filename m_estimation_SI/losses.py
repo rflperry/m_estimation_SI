@@ -19,18 +19,18 @@ class logistic_loss_smooth(smooth_atom):
         Xbeta = self.X @ beta
         # logistic log likelihood contribution
         logexp = np.logaddexp(0, Xbeta)   # log(1+exp(xβ))
-        f = (logexp - self.y * Xbeta).sum()
+        f = np.mean(logexp - self.y * Xbeta)
 
         if mode == 'func':
             return f
         elif mode == 'grad':
             # gradient = X^T (pi - y)
             pi = expit(Xbeta)
-            g = self.X.T @ (pi - self.y)
+            g = self.X.T @ (pi - self.y) / self.X.shape[0]
             return g
         elif mode == 'both':
             pi = expit(Xbeta)
-            g = self.X.T @ (pi - self.y)
+            g = self.X.T @ (pi - self.y) / self.X.shape[0]
             return f, g
         else:
             raise ValueError("mode must be 'func', 'grad', or 'both'")

@@ -1,0 +1,588 @@
+from,to,friendship
+1,28,Friend
+1,33,Best friend
+2,24,Friend
+2,37,Friend
+2,98,Friend
+2,116,Friend
+3,16,Friend
+3,28,Friend
+3,58,Friend
+3,67,Friend
+4,8,Friend
+4,12,Friend
+4,15,Friend
+4,25,Friend
+4,39,Friend
+4,89,Friend
+5,6,Friend
+5,10,Friend
+5,35,Best friend
+5,44,Friend
+5,51,Friend
+6,16,Friend
+6,123,Friend
+7,4,Friend
+7,11,Friend
+7,15,Friend
+7,17,Friend
+7,23,Friend
+7,26,Best friend
+8,4,Friend
+8,7,Friend
+8,12,Friend
+8,15,Friend
+8,26,Best friend
+8,39,Friend
+9,13,Friend
+9,19,Best friend
+9,104,Friend
+9,115,Friend
+10,5,Friend
+10,58,Friend
+10,67,Friend
+10,71,Friend
+10,146,Friend
+11,4,Friend
+11,7,Friend
+11,8,Friend
+11,26,Friend
+11,39,Friend
+12,4,Friend
+12,15,Friend
+12,17,Friend
+12,25,Friend
+12,39,Friend
+12,89,Friend
+13,9,Friend
+13,19,Friend
+13,104,Friend
+13,115,Friend
+14,2,Friend
+14,22,Friend
+14,24,Friend
+14,117,Friend
+14,148,Friend
+15,4,Friend
+15,8,Friend
+15,12,Friend
+15,25,Friend
+15,39,Friend
+15,89,Friend
+16,3,Friend
+16,6,Friend
+16,126,Friend
+16,131,Friend
+17,4,Friend
+17,7,Friend
+17,8,Friend
+17,15,Friend
+17,25,Friend
+17,26,Friend
+18,22,Best friend
+18,95,Friend
+18,138,Best friend
+19,9,Best friend
+19,13,Friend
+19,115,Friend
+20,18,Friend
+20,23,Friend
+20,95,Friend
+20,138,Friend
+21,8,Friend
+21,18,Friend
+21,23,Friend
+21,95,Friend
+21,138,Friend
+22,18,Best friend
+22,32,Friend
+22,151,Friend
+23,26,Friend
+24,2,Friend
+24,14,Friend
+24,22,Friend
+25,4,Friend
+25,7,Friend
+25,12,Best friend
+25,15,Friend
+25,17,Friend
+25,19,Friend
+26,7,Best friend
+26,8,Best friend
+26,15,Friend
+26,17,Friend
+26,23,Friend
+27,28,Friend
+27,34,Friend
+27,65,Friend
+27,93,Friend
+28,3,Friend
+28,31,Friend
+28,34,Friend
+28,41,Friend
+28,65,Friend
+29,16,Best friend
+29,120,Friend
+29,126,Best friend
+29,131,Best friend
+30,31,Friend
+30,133,Friend
+31,27,Friend
+31,28,Friend
+31,30,Best friend
+31,41,Friend
+31,122,Friend
+32,35,Friend
+32,106,Friend
+32,130,Friend
+32,141,Friend
+32,144,Friend
+33,1,Best friend
+33,27,Friend
+33,28,Friend
+33,145,Friend
+34,27,Friend
+34,28,Friend
+34,31,Friend
+34,41,Friend
+34,65,Friend
+35,36,Friend
+35,44,Friend
+35,51,Friend
+35,149,Best friend
+35,150,Friend
+35,151,Friend
+36,150,Friend
+36,151,Friend
+37,2,Best friend
+37,38,Best friend
+37,148,Best friend
+38,37,Friend
+38,148,Friend
+39,4,Friend
+39,8,Best friend
+39,12,Best friend
+39,15,Best friend
+39,37,Friend
+39,89,Best friend
+40,41,Friend
+40,143,Best friend
+40,147,Friend
+41,28,Best friend
+41,34,Friend
+41,40,Friend
+41,65,Friend
+42,48,Friend
+42,61,Friend
+43,46,Friend
+43,52,Friend
+43,56,Friend
+43,59,Friend
+43,65,Friend
+43,66,Friend
+44,5,Friend
+44,51,Best friend
+44,58,Friend
+44,67,Friend
+44,78,Friend
+44,101,Friend
+45,31,Friend
+45,64,Friend
+46,45,Friend
+46,52,Friend
+46,63,Friend
+46,65,Friend
+46,99,Friend
+46,133,Best friend
+47,42,Friend
+47,49,Friend
+47,50,Best friend
+47,57,Friend
+47,61,Friend
+47,68,Friend
+49,44,Friend
+49,50,Friend
+49,51,Friend
+49,58,Friend
+49,62,Friend
+49,67,Friend
+50,44,Friend
+50,49,Best friend
+50,51,Friend
+50,57,Best friend
+50,58,Friend
+50,60,Best friend
+51,5,Friend
+51,35,Friend
+51,44,Friend
+51,101,Friend
+51,149,Friend
+52,28,Friend
+52,65,Friend
+52,66,Best friend
+52,72,Friend
+52,87,Friend
+53,68,Friend
+53,91,Friend
+54,55,Friend
+54,61,Friend
+55,43,Friend
+55,56,Friend
+55,59,Friend
+55,61,Friend
+55,70,Best friend
+55,125,Friend
+56,59,Friend
+56,61,Friend
+56,105,Best friend
+57,46,Friend
+57,49,Friend
+57,50,Friend
+57,60,Friend
+57,133,Best friend
+58,44,Friend
+58,51,Friend
+58,67,Friend
+58,71,Friend
+58,146,Friend
+59,43,Friend
+59,56,Friend
+59,88,Friend
+59,97,Friend
+59,105,Friend
+59,135,Best friend
+60,46,Friend
+60,49,Friend
+60,50,Friend
+60,57,Best friend
+60,58,Friend
+60,133,Friend
+61,47,Friend
+61,48,Friend
+61,56,Friend
+61,59,Friend
+61,79,Best friend
+62,120,Friend
+62,126,Friend
+62,131,Friend
+63,31,Friend
+63,45,Friend
+63,46,Friend
+63,64,Friend
+63,128,Best friend
+63,152,Friend
+64,45,Best friend
+64,63,Friend
+64,65,Friend
+64,66,Friend
+64,128,Friend
+65,28,Friend
+65,52,Friend
+65,87,Friend
+66,43,Friend
+66,52,Best friend
+66,56,Friend
+66,59,Friend
+66,64,Friend
+66,65,Friend
+67,10,Friend
+67,28,Friend
+67,44,Friend
+67,58,Friend
+67,71,Friend
+67,146,Friend
+68,37,Best friend
+68,53,Best friend
+68,56,Friend
+68,61,Friend
+68,91,Best friend
+69,74,Best friend
+69,78,Friend
+69,91,Friend
+69,103,Friend
+69,106,Friend
+69,113,Friend
+70,55,Best friend
+70,59,Friend
+70,88,Friend
+70,89,Friend
+70,119,Friend
+71,10,Friend
+71,58,Best friend
+71,67,Best friend
+71,146,Friend
+71,151,Friend
+72,16,Best friend
+72,86,Friend
+72,120,Friend
+72,131,Friend
+73,82,Friend
+73,86,Friend
+73,87,Friend
+74,49,Friend
+74,69,Friend
+74,83,Friend
+74,98,Friend
+74,103,Friend
+74,113,Best friend
+75,76,Best friend
+75,80,Friend
+75,83,Friend
+75,90,Friend
+76,44,Friend
+76,72,Best friend
+76,75,Best friend
+76,78,Friend
+76,80,Friend
+76,86,Friend
+79,58,Best friend
+79,67,Friend
+79,77,Best friend
+79,78,Friend
+79,80,Best friend
+79,84,Friend
+80,75,Friend
+80,76,Friend
+80,78,Friend
+80,79,Friend
+80,84,Friend
+80,90,Friend
+81,69,Friend
+81,74,Friend
+81,85,Friend
+81,92,Best friend
+81,99,Friend
+82,73,Friend
+83,69,Friend
+83,74,Friend
+83,75,Friend
+83,85,Friend
+84,71,Friend
+84,75,Friend
+84,76,Friend
+84,77,Friend
+84,78,Friend
+84,79,Friend
+85,68,Best friend
+85,83,Best friend
+86,65,Friend
+86,72,Friend
+86,87,Friend
+86,93,Friend
+86,153,Friend
+87,28,Friend
+87,65,Best friend
+87,72,Friend
+87,86,Friend
+87,93,Friend
+87,153,Friend
+88,56,Friend
+88,70,Friend
+88,89,Friend
+89,4,Friend
+89,12,Friend
+89,39,Friend
+89,56,Friend
+89,88,Best friend
+89,112,Friend
+90,75,Best friend
+90,76,Friend
+90,80,Friend
+92,81,Best friend
+92,88,Best friend
+93,27,Best friend
+93,87,Friend
+94,103,Friend
+94,108,Friend
+94,110,Friend
+94,111,Friend
+95,18,Friend
+95,20,Best friend
+95,21,Best friend
+95,138,Friend
+96,10,Friend
+96,100,Friend
+96,110,Friend
+97,88,Friend
+97,104,Friend
+97,105,Friend
+97,112,Friend
+97,115,Friend
+98,2,Best friend
+98,49,Friend
+98,74,Friend
+98,101,Friend
+98,113,Friend
+98,137,Friend
+99,46,Friend
+99,94,Friend
+99,111,Friend
+99,133,Best friend
+100,53,Friend
+100,68,Friend
+100,85,Best friend
+100,116,Friend
+101,44,Friend
+101,51,Best friend
+101,113,Friend
+101,131,Friend
+102,94,Best friend
+102,109,Best friend
+103,69,Best friend
+103,74,Friend
+103,106,Best friend
+103,113,Friend
+104,9,Friend
+104,13,Friend
+104,115,Best friend
+105,56,Best friend
+105,61,Friend
+105,88,Friend
+105,89,Friend
+105,104,Friend
+105,112,Friend
+106,69,Friend
+106,74,Friend
+106,103,Friend
+106,113,Friend
+107,114,Friend
+107,123,Best friend
+108,95,Friend
+108,106,Friend
+108,116,Friend
+109,94,Friend
+109,111,Best friend
+111,94,Friend
+111,109,Best friend
+112,88,Friend
+112,89,Friend
+112,97,Friend
+112,104,Friend
+112,105,Friend
+112,115,Friend
+113,69,Friend
+113,74,Best friend
+113,98,Friend
+113,101,Friend
+113,106,Friend
+113,114,Friend
+114,107,Best friend
+114,123,Friend
+115,13,Friend
+115,104,Friend
+115,109,Friend
+115,111,Friend
+116,2,Friend
+116,106,Friend
+116,108,Friend
+117,114,Friend
+117,148,Friend
+118,104,Friend
+118,115,Friend
+118,127,Best friend
+118,135,Friend
+119,70,Best friend
+119,125,Friend
+120,62,Friend
+120,131,Friend
+121,132,Best friend
+121,134,Friend
+121,139,Friend
+122,92,Friend
+122,129,Friend
+122,136,Friend
+122,142,Friend
+123,107,Best friend
+123,114,Friend
+124,151,Friend
+125,66,Best friend
+125,115,Friend
+125,119,Friend
+126,16,Best friend
+126,120,Friend
+126,131,Best friend
+127,59,Friend
+127,115,Friend
+127,118,Best friend
+127,135,Friend
+128,63,Friend
+128,64,Friend
+130,32,Friend
+130,117,Friend
+130,122,Friend
+130,140,Friend
+131,16,Friend
+131,101,Friend
+131,120,Friend
+131,126,Friend
+132,121,Best friend
+132,134,Friend
+132,139,Friend
+133,46,Best friend
+133,60,Friend
+133,99,Friend
+133,104,Friend
+133,115,Friend
+134,121,Friend
+134,132,Friend
+134,147,Friend
+135,59,Friend
+135,127,Friend
+137,2,Friend
+137,49,Friend
+137,98,Best friend
+137,122,Friend
+137,140,Friend
+137,141,Friend
+138,18,Best friend
+138,95,Best friend
+138,140,Best friend
+140,129,Friend
+140,138,Friend
+140,140,Friend
+140,142,Friend
+141,32,Friend
+141,120,Friend
+141,130,Friend
+142,117,Friend
+142,120,Friend
+142,129,Friend
+142,136,Friend
+142,141,Friend
+143,40,Friend
+143,134,Friend
+143,147,Friend
+144,149,Friend
+144,151,Best friend
+145,1,Friend
+145,28,Friend
+145,33,Friend
+145,56,Friend
+145,139,Best friend
+146,44,Best friend
+146,58,Best friend
+146,67,Best friend
+146,71,Best friend
+146,149,Best friend
+147,40,Friend
+147,134,Best friend
+147,143,Friend
+148,2,Friend
+148,37,Friend
+148,38,Friend
+148,91,Friend
+149,35,Friend
+149,36,Friend
+149,78,Friend
+150,35,Friend
+150,36,Friend
+150,144,Friend
+150,148,Friend
+150,149,Friend
+150,151,Best friend
+151,35,Friend
+151,36,Best friend
+151,94,Friend
+151,144,Friend
+151,149,Friend
+151,150,Best friend

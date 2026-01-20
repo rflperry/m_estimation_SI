@@ -33,5 +33,8 @@ wheels/
 *.egg
 MANIFEST
 selectinf/
+selectinf2/
+process_glasgow/
+R/
 
 .pytest_cache/
