@@ -2,7 +2,7 @@
 
 ## Installation
 
-To set up an appropriate python virtual environment using `uv`:
+To set up an appropriate python virtual environment:
 
 ```
 virtualenv env -p python3.10
