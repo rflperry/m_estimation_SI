@@ -1,28 +1,37 @@
 # m_estimation_SI
 
-Methods for model selection and error estimation via Gaussian randomization instead of sample splitting.
-
 ## Installation
 
-To set up an appropriate python virtual environment:
+To set up an appropriate python virtual environment using `uv`:
 
 ```
-uv venv --python 3.14
-uv pip install -r requirements.txt
+virtualenv env -p python3.10
+source env/bin/activate
+pip install -r requirements.txt
+```
+
+To install the package `regreg` you will need to run:
+
+```
+pip install git+https://github.com/regreg/regreg.git
 ```
 
 Then, you can run
 ```
-uv pip install .
+pip install .
 ```
+
+Note that this will usually raise an error, but nonetheless the package will have installed successfully.
+
+To run the randomized conditional selective inference approach of Huang et al. (2025), locally install `github.com/yiling-h/PoSI-GroupLASSO`. You may need to replace `np.bool` with `bool`.
 
 ## Develop
 
 Set up a development environment as above, but furthermore install development packages
 ```
-uv pip install -r dev-requirements.txt
+pip install -r dev-requirements.txt
 ```
 and install the package in editable mode
 ```
-uv pip install -e .
+pip install -e .
 ```
