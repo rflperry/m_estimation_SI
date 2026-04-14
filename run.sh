@@ -1,5 +1,5 @@
 ###################################################
-# Linear model, homogenous errors, varying n
+# Figure 1: Linear model, homogenous errors, varying n
 ###################################################
 python experiments/glm_confints.py \
   --p 40 \
@@ -21,7 +21,7 @@ python experiments/plot_coverage.py \
   --logx
 
 ###################################################
-# Logistic model, varying n
+# Figure 2: Logistic model, varying n
 ###################################################
 
 python experiments/glm_confints.py \
@@ -42,7 +42,7 @@ python experiments/plot_coverage.py \
   --logx
 
 ###################################################
-# Linear model, clustered errors, varying n
+# Figure 3: Linear model, clustered errors, varying n
 ###################################################
 
 python experiments/glm_confints.py \
