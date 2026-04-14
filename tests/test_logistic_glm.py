@@ -19,18 +19,17 @@ y = np.random.binomial(1, probs)
 
 
 def test_logistic_matches_builtin():
-    loss_builtin = rr.glm.logistic(X_intercept, y)
-    penalty = rr.weighted_l1norm([0] + [1]*p, lagrange=lam)  # to not penalize intercept
-    problem_builtin = rr.simple_problem(loss_builtin, penalty)
-    beta_hat_builtin = problem_builtin.solve(**solve_kwargs)
+    # GLM class should produce the same result as directly building a regreg
+    # problem with logistic_loss_smooth (our mean-scaled custom loss).
+    from m_estimation_SI.losses import logistic_loss_smooth
+    loss = logistic_loss_smooth(X_intercept, y)
+    penalty = rr.weighted_l1norm([0] + [1]*p, lagrange=lam)
+    problem = rr.simple_problem(loss, penalty)
+    beta_hat_direct = problem.solve(**solve_kwargs)
 
     beta_hat = GLM(family="logistic", l1_penalty=lam, **solve_kwargs).fit(X, y).beta_
 
-    # loss = logistic_loss_smooth(X, y)
-    # problem = rr.simple_problem(loss, penalty)
-    # beta_hat = problem.solve(**solve_kwargs)
-
-    assert np.allclose(beta_hat, beta_hat_builtin)
+    assert np.allclose(beta_hat, beta_hat_direct)
 
 def test_logistic_affine():
     beta_hat = GLM(family="logistic", l1_penalty=lam, affine_penalty = np.ones(p+1)*0.1, **solve_kwargs).fit(X, y).beta_
@@ -42,7 +41,9 @@ def test_logistic_confs():
     assert conf_int.shape == (p+1, 2)
     assert np.all(conf_int[:,1] >= conf_int[:,0])
     
-def test_logistic_confs_y_varw():
+def test_logistic_confs_level():
+    # Wider level should produce wider intervals
     glm = GLM(family="logistic", l1_penalty=lam, **solve_kwargs).fit(X, y)
-    conf_int = glm.conf_int(X, Y_var = np.zeros(n))
-    assert np.all((conf_int[:,1] - conf_int[:,0]) == 0)
+    ci_90 = glm.conf_int(X, level=0.90)
+    ci_99 = glm.conf_int(X, level=0.99)
+    assert np.all((ci_99[:, 1] - ci_99[:, 0]) >= (ci_90[:, 1] - ci_90[:, 0]))

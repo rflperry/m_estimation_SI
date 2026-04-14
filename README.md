@@ -4,7 +4,7 @@
 
 To set up an appropriate python virtual environment:
 
-```
+```bash
 virtualenv env -p python3.10
 source env/bin/activate
 pip install -r requirements.txt
@@ -12,12 +12,13 @@ pip install -r requirements.txt
 
 To install the package `regreg` you will need to run:
 
-```
+```bash
 pip install git+https://github.com/regreg/regreg.git
 ```
 
 Then, you can run
-```
+
+```bash
 pip install .
 ```
 
@@ -28,10 +29,33 @@ To run the randomized conditional selective inference approach of Huang et al. (
 ## Develop
 
 Set up a development environment as above, but furthermore install development packages
-```
+
+```bash
 pip install -r dev-requirements.txt
 ```
+
 and install the package in editable mode
-```
+
+```bash
 pip install -e .
+```
+
+## Testing
+
+Run all tests:
+
+```bash
+pytest tests/
+```
+
+Run a specific test file:
+
+```bash
+pytest tests/test_glm.py
+```
+
+Run a single test:
+
+```bash
+pytest tests/test_glm.py::TestConfInt::test_lower_leq_upper
 ```
