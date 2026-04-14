@@ -3,14 +3,11 @@
 Selective inference for penalized M-estimators in Python.
 
 After selecting variables via a penalized regression (e.g. lasso), standard confidence intervals are invalid because the data were used
-twice, once for selection and once for estimation. This package provides tools for constructing confidence intervals that remain valid after data-driven variable selection, and supports clustered and heteroskedastic errors.
+twice, once for selection and once for estimation. This package provides tools for constructing confidence intervals that remain valid after data-driven variable selection, and supports clustered and heteroskedastic errors. See [[1]](https://arxiv.org/abs/2601.13514) for further details.
 
 ## Quick start
 
-The core workflow is **outcome thinning**: split the information in the
-responses into a training half (for selection) and a testing half (for
-inference) by adding and subtracting Gaussian noise whose variance matches
-the estimated outcome variance.
+The procedure is an alternative to sample splitting in which train and test outcomes are created by adding scaled Gaussian noise to the original outcomes. The package supplies penalized generalized linear model estimators that accept real valued inputs, unlike many existing software implementations.
 
 ```python
 import numpy as np
@@ -29,7 +26,7 @@ glm_init = GLM(family="logistic").fit(X, Y)
 Y_var = glm_init.get_var(X, Y, error_model="heterogeneous")
 
 # 2. Draw noise scaled by the estimated variance and split the outcomes
-gamma = 1.0                              # controls train/test information ratio
+gamma = 1.0                              # controls information split
 W = rng.normal(0, np.sqrt(Y_var))
 Y_train = Y + gamma * W                 # used for variable selection
 Y_test  = Y - W / gamma                 # used for inference
@@ -47,8 +44,8 @@ ci = glm_inf.conf_int(X_sel, level=0.95)
 print("95% confidence intervals (intercept + selected features):\n", ci)
 ```
 
-A complete worked example on real friendship-network data is in
-[glasgow_analysis.ipynb](glasgow_analysis.ipynb).
+A complete worked example on the Glasgow friendship-network data is in
+[`glasgow_analysis.ipynb`]([glasgow_analysis.ipynb](https://github.com/rflperry/m_estimation_SI/blob/main/glasgow_analysis.ipynb)). See details in [[1]](https://arxiv.org/abs/2601.13514).
 
 ## Installation
 
@@ -90,7 +87,7 @@ Penalized generalized linear model with robust sandwich standard errors.
 | `family` | `'linear'` or `'logistic'` |
 | `l1_penalty` | Lasso penalty weight λ (mean-scaled; comparable across sample sizes) |
 | `intercept` | Whether to fit an intercept (default `True`, never penalized) |
-| `affine_penalty` | Additive linear term for randomized selective-inference objectives |
+| `affine_penalty` | Alternative to randomizing the outcome, see [1]. |
 
 Key methods after `.fit(X, y)`:
 
@@ -100,11 +97,6 @@ Key methods after `.fit(X, y)`:
 | `.active()` | Indices of selected features |
 | `.conf_int(X, level, clusters)` | Wald CIs (HC1 or CR1 robust) |
 | `.get_var(X, Y, error_model, clusters)` | Working variance estimates |
-
-### `logistic_group_instance(n, p, sgroup, ...)`
-
-Generates synthetic logistic regression data for group-lasso experiments.
-Returns `(X, Y, beta_true, active_indices, sigma_X)`.
 
 ## Develop
 
@@ -132,11 +124,4 @@ pytest tests/test_glm.py::TestConfInt::test_lower_leq_upper
 
 ## References
 
-- Neufeld, A. et al. (2024). Cohort selection and post-selection inference
-  via data thinning. *Preprint*.
-- Huang, Y. et al. (2025). Randomized conditional selective inference for
-  group lasso. *Preprint*.
-- MacKinnon, J. G. & White, H. (1985). Some heteroskedasticity-consistent
-  covariance matrix estimators. *Journal of Econometrics*, 29, 305–325.
-- Cameron, A. C. & Miller, D. L. (2015). A practitioner's guide to
-  cluster-robust inference. *Journal of Human Resources*, 50, 317–372.
+- [[1]](https://arxiv.org/abs/2601.13514) Perry, R, et al. (2026). Post-selection inference for penalized M-estimators via score thinning. arXiv:2601.13514.
