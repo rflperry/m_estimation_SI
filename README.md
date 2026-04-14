@@ -98,6 +98,16 @@ Key methods after `.fit(X, y)`:
 | `.conf_int(X, level, clusters)` | Wald CIs (HC1 or CR1 robust) |
 | `.get_var(X, Y, error_model, clusters)` | Working variance estimates |
 
+## Reproducibility
+
+After following the installation instructions, results from [[1]](https://arxiv.org/abs/2601.13514) can be reproduced as follows.
+The Glasgow friendship-network data analysis is in
+[`glasgow_analysis.ipynb`]([glasgow_analysis.ipynb](https://github.com/rflperry/m_estimation_SI/blob/main/glasgow_analysis.ipynb)). Simulation results can be replicationed by the following command:
+
+```bash
+sh run_more.sh
+```
+
 ## Develop
 
 Install development dependencies and the package in editable mode:
