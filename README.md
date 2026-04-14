@@ -1,4 +1,4 @@
-# m_estimation_SI
+# Post-selection inference for penalized M-estimators via score thinning
 
 Selective inference for penalized M-estimators in Python.
 
