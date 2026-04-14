@@ -2,66 +2,82 @@
 
 Selective inference for penalized M-estimators in Python.
 
-After selecting variables via a penalized regression (e.g. lasso or group
-lasso), standard confidence intervals are invalid because the data were used
-twice — once to select and once to estimate. This package provides tools for
-constructing confidence intervals that remain valid after data-driven variable
-selection, and supports realistic error structures including clustered and
-heteroskedastic observations.
+After selecting variables via a penalized regression (e.g. lasso), standard confidence intervals are invalid because the data were used
+twice, once for selection and once for estimation. This package provides tools for constructing confidence intervals that remain valid after data-driven variable selection, and supports clustered and heteroskedastic errors.
 
 ## Quick start
+
+The core workflow is **outcome thinning**: split the information in the
+responses into a training half (for selection) and a testing half (for
+inference) by adding and subtracting Gaussian noise whose variance matches
+the estimated outcome variance.
 
 ```python
 import numpy as np
 from m_estimation_SI import GLM
 
 rng = np.random.default_rng(0)
-X = rng.standard_normal((300, 20))
-beta_true = np.zeros(21)
-beta_true[1:4] = [1.5, -1.0, 0.8]          # three active features
-eta = np.c_[np.ones(300), X] @ beta_true
-y = rng.binomial(1, 1 / (1 + np.exp(-eta))).astype(float)
+n, p = 300, 20
+X = rng.standard_normal((n, p))
+beta_true = np.zeros(p + 1)
+beta_true[1:4] = [1.5, -1.0, 0.8]
+eta = np.c_[np.ones(n), X] @ beta_true
+Y = rng.binomial(1, 1 / (1 + np.exp(-eta))).astype(float)
 
-# Fit a penalised logistic regression
-lam = np.sqrt(2 * np.log(20) / 300)
-glm = GLM(family="logistic", l1_penalty=lam).fit(X, y)
+# 1. Estimate per-observation outcome variance with an unpenalised fit
+glm_init = GLM(family="logistic").fit(X, Y)
+Y_var = glm_init.get_var(X, Y, error_model="heterogeneous")
 
-print("Selected features:", glm.active())       # zero-indexed, excl. intercept
-print("95% Wald CIs:\n", glm.conf_int(X))       # shape (21, 2)
+# 2. Draw noise scaled by the estimated variance and split the outcomes
+gamma = 1.0                              # controls train/test information ratio
+W = rng.normal(0, np.sqrt(Y_var))
+Y_train = Y + gamma * W                 # used for variable selection
+Y_test  = Y - W / gamma                 # used for inference
 
-# Cluster-robust standard errors (10 clusters of 30)
-clusters = np.repeat(np.arange(10), 30)
-print("CR1 CIs:\n", glm.conf_int(X, clusters=clusters))
+# 3. Select features on the training outcomes
+lam = 0.05
+glm_sel = GLM(family="logistic", l1_penalty=lam).fit(X, Y_train)
+selected = glm_sel.active()             # zero-indexed, excludes intercept
+print("Selected features:", selected)
+
+# 4. Refit on the selected features using the testing outcomes
+X_sel = X[:, selected]
+glm_inf = GLM(family="logistic").fit(X_sel, Y_test)
+ci = glm_inf.conf_int(X_sel, level=0.95)
+print("95% confidence intervals (intercept + selected features):\n", ci)
 ```
+
+A complete worked example on real friendship-network data is in
+[glasgow_analysis.ipynb](glasgow_analysis.ipynb).
 
 ## Installation
 
-Create and activate a Python 3.10 virtual environment:
+Install with [uv](https://docs.astral.sh/uv/) (recommended):
+
+```bash
+uv venv --python 3.10
+source .venv/bin/activate
+uv pip install -r requirements.txt
+uv pip install git+https://github.com/regreg/regreg.git
+uv pip install .
+```
+
+Or with pip and virtualenv:
 
 ```bash
 virtualenv env -p python3.10
 source env/bin/activate
 pip install -r requirements.txt
-```
-
-Install `regreg` from GitHub (required; not on PyPI):
-
-```bash
 pip install git+https://github.com/regreg/regreg.git
-```
-
-Install this package:
-
-```bash
 pip install .
 ```
 
-> **Note:** `pip install .` may print an error message but installs successfully.
+> **Note:** The install step may print an error but completes successfully.
 
-To also run the randomized conditional selective inference (RSC) comparison
-method of Huang et al. (2025), locally clone and install
-`github.com/yiling-h/PoSI-GroupLASSO`.  You may need to replace
-`np.bool` with `bool` in its source.
+To use the randomized conditional selective inference (RSC) comparison method
+of Huang et al. (2025), locally clone and install
+`github.com/yiling-h/PoSI-GroupLASSO`.  You may need to replace `np.bool`
+with `bool` in its source.
 
 ## Core API
 
@@ -95,8 +111,8 @@ Returns `(X, Y, beta_true, active_indices, sigma_X)`.
 Install development dependencies and the package in editable mode:
 
 ```bash
-pip install -r dev-requirements.txt
-pip install -e .
+uv pip install -r dev-requirements.txt
+uv pip install -e .
 ```
 
 ## Testing
@@ -116,6 +132,8 @@ pytest tests/test_glm.py::TestConfInt::test_lower_leq_upper
 
 ## References
 
+- Neufeld, A. et al. (2024). Cohort selection and post-selection inference
+  via data thinning. *Preprint*.
 - Huang, Y. et al. (2025). Randomized conditional selective inference for
   group lasso. *Preprint*.
 - MacKinnon, J. G. & White, H. (1985). Some heteroskedasticity-consistent
