@@ -1,19 +1,3 @@
-# Debugging
-python experiments/glm_confints.py \
-  --p 40 \
-  --level 0.90 \
-  --n 100 \
-  --n_reps 1 \
-  --gamma 1 \
-  --sparsity 10 \
-  --signal 1 \
-  --lam 0.02 \
-  --verbose \
-  --debug \
-  --family linear \
-  --error_model clustered \
-  --cluster_size 5
-
 ###################################################
 # Linear model, homogenous errors, varying n
 ###################################################

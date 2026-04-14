@@ -45,7 +45,7 @@ print("95% confidence intervals (intercept + selected features):\n", ci)
 ```
 
 A complete worked example on the Glasgow friendship-network data is in
-[`glasgow_analysis.ipynb`]([glasgow_analysis.ipynb](https://github.com/rflperry/m_estimation_SI/blob/main/glasgow_analysis.ipynb)). See details in [[1]](https://arxiv.org/abs/2601.13514).
+[`glasgow_analysis.ipynb`](https://github.com/rflperry/m_estimation_SI/blob/main/glasgow_analysis.ipynb). See details in [[1]](https://arxiv.org/abs/2601.13514).
 
 ## Installation
 
@@ -97,6 +97,16 @@ Key methods after `.fit(X, y)`:
 | `.active()` | Indices of selected features |
 | `.conf_int(X, level, clusters)` | Wald CIs (HC1 or CR1 robust) |
 | `.get_var(X, Y, error_model, clusters)` | Working variance estimates |
+
+## Reproducibility
+
+After following the installation instructions, results from [[1]](https://arxiv.org/abs/2601.13514) can be reproduced as follows.
+The Glasgow friendship-network data analysis is in
+[`glasgow_analysis.ipynb`](https://github.com/rflperry/m_estimation_SI/blob/main/glasgow_analysis.ipynb). Simulation results can be replicationed by the following command:
+
+```bash
+sh run_more.sh
+```
 
 ## Develop
 
