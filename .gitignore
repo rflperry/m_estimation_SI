@@ -11,8 +11,12 @@ venv.bak/
 # Byte-compiled / optimized / DLL files
 __pycache__/
 
-# logs
+# IDE
+.vscode/
+
+# project_misc
 logs/
+R/
 
 # Distribution / packaging
 .Python
