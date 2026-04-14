@@ -38,3 +38,6 @@ process_glasgow/
 R/
 
 .pytest_cache/
+
+# Claude Code
+CLAUDE.md
