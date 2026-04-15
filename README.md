@@ -105,7 +105,7 @@ The Glasgow friendship-network data analysis seen in Figure 4 is in
 [`glasgow_analysis.ipynb`](https://github.com/rflperry/m_estimation_SI/blob/main/glasgow_analysis.ipynb). Simulation results for Figures 1-3 can be replicated via the following command:
 
 ```bash
-sh run_more.sh
+sh run.sh
 ```
 
 ## Develop
