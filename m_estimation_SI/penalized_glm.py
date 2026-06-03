@@ -301,6 +301,7 @@ class GLM:
     def se(
         self,
         X: np.ndarray,
+        cov=False,
         clusters=None,
         correction=None,
     ) -> np.ndarray:
@@ -323,6 +324,8 @@ class GLM:
         ----------
         X : ndarray of shape (n_samples, n_features)
             Design matrix used for fitting (without intercept column).
+        cov : bool, default False
+            If true, returns the full covariance matrix instead.
         clusters : ndarray of shape (n_samples,) or None
             Integer cluster labels.  If provided, CR1 cluster-robust
             standard errors are computed; otherwise HC1 is used.
@@ -366,6 +369,8 @@ class GLM:
         if correction is not None:
             Sigma = Sigma + correction
 
+        if cov:
+            return H_inv @ Sigma @ H_inv
         return np.sqrt(np.diag(H_inv @ Sigma @ H_inv))
 
     # ------------------------------------------------------------------

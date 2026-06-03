@@ -7,6 +7,7 @@ from m_estimation_SI import GLM
 import pandas as pd
 from joblib import Parallel, delayed
 from m_estimation_SI.simulation import logistic_group_instance
+from m_estimation_SI.utils.cv import select_lambda_by_mse_for_lasso
 
 from selectinf.group_lasso_query import group_lasso
 
@@ -119,6 +120,10 @@ def block_sqrt_mult(W, Y_var, Z=None):
 
 
 def classic_si(family, X, Y, mu, penalty, level, intercept, clusters=None):
+    
+    if penalty < 0:
+        penalty = select_lambda_by_mse_for_lasso(family, X, Y, intercept, -1*penalty)
+    
     sel = GLM(family=family, l1_penalty=penalty, intercept=intercept).fit(X, Y).active()
 
     if len(sel) == 0:
@@ -143,7 +148,7 @@ def classic_si(family, X, Y, mu, penalty, level, intercept, clusters=None):
 
 
 def sample_splitting_si(
-    family, X, Y, mu, Y_var, penalty, level, gamma, intercept, clusters=None
+    family, X, Y, mu, penalty, level, gamma, intercept, clusters=None
 ):
     n = X.shape[0]
 
@@ -159,6 +164,10 @@ def sample_splitting_si(
     test_indices = np.setdiff1d(np.arange(n), train_indices)
     X_train, X_test = X[train_indices], X[test_indices]
     Y_train, Y_test = Y[train_indices], Y[test_indices]
+    
+    if penalty < 0:
+        penalty = select_lambda_by_mse_for_lasso(family, X_train, Y_train, intercept, -1*penalty)
+    
     sel = (
         GLM(family=family, l1_penalty=penalty, intercept=intercept)
         .fit(X_train, Y_train)
@@ -227,6 +236,9 @@ def thin_outcomes_si(
         W = block_sqrt_mult(W, Y_var_noise)
     else:
         W *= np.sqrt(Y_var_noise)
+        
+    if penalty < 0:
+        penalty = select_lambda_by_mse_for_lasso(family, X, Y + W * gamma, intercept, -1*penalty)
 
     sel = (
         GLM(family=family, l1_penalty=penalty, intercept=intercept)
@@ -235,7 +247,7 @@ def thin_outcomes_si(
     )
 
     if len(sel) == 0:
-        return [0, 0, 0, 0, 0, None]
+        return ([0, 0, 0, 0, 0, None], penalty)
     else:
         X_sel = X[:, sel]
         model = GLM(family=family, intercept=intercept).fit(X_sel, Y - W / gamma)
@@ -248,14 +260,14 @@ def thin_outcomes_si(
         beta_sel = GLM(family=family, intercept=intercept).fit(X_sel, mu).beta_
         cover = (beta_sel >= conf_int[:, 0]) & (beta_sel <= conf_int[:, 1])
         rejects = (0 < conf_int[:, 0]) | (0 > conf_int[:, 1])
-        return [
+        return ([
             sum(cover),
             sum(rejects),
             sum(np.abs(beta_est - beta_sel)),
             len(sel) + intercept,
             sum(length),
-            ",".join(map(str, sel)),
-        ]
+            ",".join(map(str, sel))
+        ], penalty)
 
 
 def thin_gradient_si(
@@ -483,7 +495,7 @@ def randomized_conditional_exact(
 
     if intercept:
         X = np.hstack([np.ones((X.shape[0], 1)), X])
-    n, p = X.shape
+    n, _ = X.shape
 
     if Y_var is not None:
         Y_var_noise = Y_var
@@ -573,6 +585,79 @@ def randomized_conditional_exact(
         ",".join(map(str, sel)),
     ]
 
+# def thin_estimator(
+#     family,
+#     X,
+#     Y,
+#     mu,
+#     Y_var,
+#     penalty,
+#     level,
+#     gamma,
+#     W,
+#     intercept,
+#     error_model,
+#     true_sandwich=True,
+#     clusters=None,
+# ):
+#     full_model = GLM(family=family, intercept=intercept).fit(X, Y)
+#     full_beta = full_model.beta_
+#     full_cov = full_model.se(X, cov=True, clusters=clusters) / np.sqrt(X.shape[0])
+    
+    
+    
+#     if Y_var is not None:
+#         Y_var_noise = Y_var
+#     elif X.shape[0] > X.shape[1] + 1:  # n > p
+#         Y_var_noise = (
+#             GLM(family=family, intercept=True)
+#             .fit(X, Y)
+#             .get_var(X, Y, error_model, clusters=clusters)
+#         )
+#     else:  # p > n
+#         Y_var_noise = (
+#             GLM(
+#                 family=family,
+#                 intercept=True,
+#                 l1_penalty=penalty,
+#             )
+#             .fit(X, Y)
+#             .get_var(X, Y, error_model, clusters=clusters)
+#         )
+
+#     if clusters is not None:
+#         W = block_sqrt_mult(W, Y_var_noise)
+#     else:
+#         W *= np.sqrt(Y_var_noise)
+
+#     sel = (
+#         GLM(family=family, l1_penalty=penalty, intercept=intercept)
+#         .fit(X, Y + W * gamma)
+#         .active()
+#     )
+
+#     if len(sel) == 0:
+#         return [0, 0, 0, 0, 0, None]
+#     else:
+#         X_sel = X[:, sel]
+#         model = GLM(family=family, intercept=intercept).fit(X_sel, Y - W / gamma)
+#         beta_est = model.beta_
+#         if true_sandwich:
+#             conf_int = model.conf_int(X_sel, level=level, clusters=clusters)
+#         else:
+#             raise ValueError("not implemented")
+#         length = conf_int[:, 1] - conf_int[:, 0]
+#         beta_sel = GLM(family=family, intercept=intercept).fit(X_sel, mu).beta_
+#         cover = (beta_sel >= conf_int[:, 0]) & (beta_sel <= conf_int[:, 1])
+#         rejects = (0 < conf_int[:, 0]) | (0 > conf_int[:, 1])
+#         return [
+#             sum(cover),
+#             sum(rejects),
+#             sum(np.abs(beta_est - beta_sel)),
+#             len(sel) + intercept,
+#             sum(length),
+#             ",".join(map(str, sel)),
+#         ]
 
 def run_simulation(
     n,
@@ -704,7 +789,6 @@ def run_simulation(
             X.copy(),
             Y,
             mu,
-            Y_var,
             np.sqrt(1 + gamma) * penalty,
             level,
             gamma,
@@ -727,7 +811,7 @@ def run_simulation(
     # ----- Thinning outcomes -----
     W = np.random.normal(0, 1, size=n)
     try:
-        results["thin_outcomes"] = thin_outcomes_si(
+        results["thin_outcomes"], penalty = thin_outcomes_si(
             family,
             X.copy(),
             Y,
@@ -793,7 +877,7 @@ def run_simulation(
             Y,
             mu,
             Y_var,
-            np.sqrt(1 + gamma) * penalty,
+            penalty, # np.sqrt(1 + gamma) * penalty,
             level,
             gamma,
             W.copy(),
@@ -825,7 +909,7 @@ def run_simulation(
             Y,
             mu,
             Y_var,
-            np.sqrt(1 + gamma) * penalty,
+            penalty, # np.sqrt(1 + gamma) * penalty,
             level,
             gamma,
             W.copy(),
