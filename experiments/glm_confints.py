@@ -678,12 +678,10 @@ def run_simulation(
     misspecified=False,
     cluster_size=None,
 ):
-    if family == "logistic":
-        inst = logistic_group_instance
-    elif family == "linear":
+    if family in ("logistic", "linear", "poisson"):
         inst = logistic_group_instance
     else:
-        raise ValueError("Unsupported family")
+        raise ValueError(f"Unsupported family: {family}")
 
     # signal = np.sqrt(signal_frac * 2 * np.log(p))
     if sparsity < 1:
@@ -727,6 +725,18 @@ def run_simulation(
         if error_model == "clustered":
             raise ValueError("clusters not implemented for logistic")
 
+    elif family == "poisson":
+        if misspecified in ("var", "both"):
+            raise ValueError("Variance misspecification not implemented for Poisson")
+        if error_model == "clustered":
+            raise ValueError("Clustered errors not implemented for Poisson")
+        # mu was the linear predictor (possibly softplus-transformed for mean misspecification);
+        # apply the log link inverse to get Poisson means.
+        mu = np.exp(mu)
+        Y = np.random.poisson(mu).astype(float)
+        if true_noise_var:
+            Y_var = mu  # Poisson variance equals mean
+
     elif family == "linear":
         if misspecified in ("var", "both"):
             errors = np.random.laplace(loc=0, scale=np.sqrt(dispersion / 2), size=n)
@@ -760,8 +770,6 @@ def run_simulation(
             Y = mu + errors
             if true_noise_var:
                 Y_var = np.ones(X.shape[0]) * dispersion
-    else:
-        raise ValueError("Unsupported family")
 
     # L1 penalty
     penalty = lam * np.sqrt(2 * np.log(p) / n) * np.std(Y)
@@ -809,34 +817,37 @@ def run_simulation(
         results["sample_splitting"] = [None] * 8
 
     # ----- Thinning outcomes -----
+    # Gaussian noise thinning is not applicable for Poisson counts: Y + W*gamma
+    # can be negative, violating the non-negativity constraint on counts.
     W = np.random.normal(0, 1, size=n)
-    try:
-        results["thin_outcomes"], penalty = thin_outcomes_si(
-            family,
-            X.copy(),
-            Y,
-            mu,
-            Y_var,
-            np.sqrt(1 + gamma) * penalty,
-            level,
-            gamma,
-            W.copy(),
-            intercept,
-            error_model,
-            clusters=clusters,
-        )
-        if results["classic"][-1] is not None:
-            TPR, FDR = selection_accuracy(
-                # results["classic"][-3]
-                ",".join(map(str, np.where(beta_true != 0)[0])),
-                results["thin_outcomes"][-1],
+    if family != "poisson":
+        try:
+            results["thin_outcomes"], penalty = thin_outcomes_si(
+                family,
+                X.copy(),
+                Y,
+                mu,
+                Y_var,
+                np.sqrt(1 + gamma) * penalty,
+                level,
+                gamma,
+                W.copy(),
+                intercept,
+                error_model,
+                clusters=clusters,
             )
-            results["thin_outcomes"] += [TPR, FDR]
-        else:
-            results["thin_outcomes"] += [None, None]
-    except Exception as e:
-        print(f"Error in thin_outcomes: {e}")
-        results["thin_outcomes"] = [None] * 8
+            if results["classic"][-1] is not None:
+                TPR, FDR = selection_accuracy(
+                    # results["classic"][-3]
+                    ",".join(map(str, np.where(beta_true != 0)[0])),
+                    results["thin_outcomes"][-1],
+                )
+                results["thin_outcomes"] += [TPR, FDR]
+            else:
+                results["thin_outcomes"] += [None, None]
+        except Exception as e:
+            print(f"Error in thin_outcomes: {e}")
+            results["thin_outcomes"] = [None] * 8
 
     # ----- Thinning gradient -----
     # try:
@@ -867,7 +878,8 @@ def run_simulation(
     #     results["thin_gradient"] = [None] * 8
 
     # ----- Randomized Conditional (Huang 2025) -----
-    if error_model == "clustered":
+    # RSC only supports linear and logistic families.
+    if error_model == "clustered" or family not in ("linear", "logistic"):
         return results
 
     try:

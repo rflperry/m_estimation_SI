@@ -2,7 +2,7 @@
 
 import numpy as np
 import pytest
-from m_estimation_SI.losses import logistic_loss_smooth, least_squares_loss_smooth
+from m_estimation_SI.losses import logistic_loss_smooth, least_squares_loss_smooth, poisson_loss_smooth
 
 RNG = np.random.default_rng(0)
 N, P = 80, 5
@@ -10,6 +10,7 @@ X = RNG.standard_normal((N, P))
 BETA = RNG.standard_normal(P)
 Y_BIN = (RNG.standard_normal(N) > 0).astype(float)
 Y_CONT = RNG.standard_normal(N)
+Y_COUNT = RNG.poisson(3, size=N).astype(float)  # Poisson counts
 
 
 # ---------------------------------------------------------------------------
@@ -138,3 +139,76 @@ class TestLeastSquaresLoss:
     def test_invalid_mode_raises(self):
         with pytest.raises(ValueError):
             self.loss.smooth_objective(BETA, mode="bad")
+
+
+# ---------------------------------------------------------------------------
+# poisson_loss_smooth
+# ---------------------------------------------------------------------------
+
+class TestPoissonLoss:
+    def setup_method(self):
+        # Use small BETA to avoid exp overflow
+        self.beta = BETA * 0.1
+        self.loss = poisson_loss_smooth(X, Y_COUNT)
+
+    def test_func_mode_returns_nonnegative_scalar(self):
+        f = self.loss.smooth_objective(self.beta, mode="func")
+        assert np.isscalar(f) or f.ndim == 0
+        assert f >= 0
+
+    def test_grad_mode_returns_correct_shape(self):
+        g = self.loss.smooth_objective(self.beta, mode="grad")
+        assert g.shape == (P,)
+
+    def test_both_mode_consistent_with_separate(self):
+        f_both, g_both = self.loss.smooth_objective(self.beta, mode="both")
+        f_func = self.loss.smooth_objective(self.beta, mode="func")
+        g_grad = self.loss.smooth_objective(self.beta, mode="grad")
+        assert np.isclose(f_both, f_func)
+        assert np.allclose(g_both, g_grad)
+
+    def test_gradient_matches_finite_difference(self):
+        eps = 1e-5
+        _, g = self.loss.smooth_objective(self.beta, mode="both")
+        g_fd = np.zeros(P)
+        for j in range(P):
+            beta_plus = self.beta.copy(); beta_plus[j] += eps
+            beta_minus = self.beta.copy(); beta_minus[j] -= eps
+            f_plus = self.loss.smooth_objective(beta_plus, mode="func")
+            f_minus = self.loss.smooth_objective(beta_minus, mode="func")
+            g_fd[j] = (f_plus - f_minus) / (2 * eps)
+        assert np.allclose(g, g_fd, atol=1e-5)
+
+    def test_predict_is_positive(self):
+        mu = self.loss.predict_(X, self.beta)
+        assert mu.shape == (N,)
+        assert np.all(mu > 0)
+
+    def test_hessian_shape_and_psd(self):
+        H = self.loss.get_hessian(X, self.beta)
+        assert H.shape == (P, P)
+        eigvals = np.linalg.eigvalsh(H)
+        assert np.all(eigvals >= -1e-10), "Hessian must be positive semi-definite"
+
+    def test_hessian_formula(self):
+        mu = np.exp(X @ self.beta)
+        expected = (X * mu[:, None]).T @ X / N
+        assert np.allclose(self.loss.get_hessian(X, self.beta), expected)
+
+    def test_var_equals_fitted_mean(self):
+        var = self.loss.get_var_(X, self.beta)
+        mu = np.exp(X @ self.beta)
+        assert np.allclose(var, mu)
+
+    def test_var_is_positive(self):
+        var = self.loss.get_var_(X, self.beta)
+        assert np.all(var > 0)
+
+    def test_invalid_y_raises(self):
+        y_bad = np.full(N, -1.0)
+        with pytest.raises(ValueError):
+            poisson_loss_smooth(X, y_bad)
+
+    def test_invalid_mode_raises(self):
+        with pytest.raises(ValueError):
+            self.loss.smooth_objective(self.beta, mode="bad")

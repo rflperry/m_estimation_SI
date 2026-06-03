@@ -4,7 +4,7 @@ import numpy as np
 import regreg.api as rr
 from scipy.stats import norm
 from scipy.special import expit
-from .losses import logistic_loss_smooth, least_squares_loss_smooth
+from .losses import logistic_loss_smooth, least_squares_loss_smooth, poisson_loss_smooth
 
 
 class GLM:
@@ -21,9 +21,10 @@ class GLM:
 
     Parameters
     ----------
-    family : {'linear', 'logistic'}
+    family : {'linear', 'logistic', 'poisson'}
         Response distribution.  ``'linear'`` uses least-squares loss;
-        ``'logistic'`` uses binary cross-entropy loss.
+        ``'logistic'`` uses binary cross-entropy loss;
+        ``'poisson'`` uses Poisson log-likelihood with log link.
     l1_penalty : float or None, default None
         L1 (lasso) penalty weight ``lambda >= 0``.  ``None`` or ``0``
         fits an unpenalized model.
@@ -126,7 +127,8 @@ class GLM:
             one is added automatically when ``intercept=True``.
         y : ndarray of shape (n_samples,)
             Response vector.  Binary ``{0, 1}`` for ``family='logistic'``;
-            continuous for ``family='linear'``.
+            continuous for ``family='linear'``; non-negative integers for
+            ``family='poisson'``.
 
         Returns
         -------
@@ -145,10 +147,12 @@ class GLM:
             self.loss_ = logistic_loss_smooth(X, y)
         elif self.family == "linear":
             self.loss_ = least_squares_loss_smooth(X, y)
+        elif self.family == "poisson":
+            self.loss_ = poisson_loss_smooth(X, y)
         else:
             raise ValueError(
                 f"family='{self.family}' is not supported. "
-                "Choose 'linear' or 'logistic'."
+                "Choose 'linear', 'logistic', or 'poisson'."
             )
 
         if self.weights is None:
@@ -184,7 +188,8 @@ class GLM:
         Returns
         -------
         ndarray of shape (n_samples,)
-            Predicted probabilities (logistic) or fitted values (linear).
+            Predicted probabilities (logistic), fitted means (poisson),
+            or fitted values (linear).
         """
         assert self.loss_ is not None, "Call fit() before predict()."
         X_pred = np.hstack([np.ones((X.shape[0], 1)), X]) if self.intercept else X

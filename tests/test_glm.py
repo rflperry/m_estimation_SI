@@ -28,6 +28,13 @@ ETA = X_INT @ BETA_TRUE
 PROBS = 1 / (1 + np.exp(-ETA))
 Y_BIN = RNG.binomial(1, PROBS).astype(float)
 
+# Poisson data (small coefficients to keep means well-behaved)
+BETA_POISSON = np.zeros(P + 1)
+BETA_POISSON[0] = 0.5   # intercept -> baseline mean ~1.6
+BETA_POISSON[1:4] = [0.3, -0.2, 0.2]
+MU_POISSON = np.exp(X_INT @ BETA_POISSON)
+Y_COUNT = RNG.poisson(MU_POISSON).astype(float)
+
 # Cluster labels (15 clusters of 10)
 N_CLUSTERS = 15
 CLUSTER_SIZE = N // N_CLUSTERS
@@ -63,7 +70,16 @@ class TestFit:
 
     def test_unsupported_family_raises(self):
         with pytest.raises(ValueError):
-            GLM(family="poisson", l1_penalty=LAM).fit(X, Y_BIN)
+            GLM(family="gamma", l1_penalty=LAM).fit(X, Y_BIN)
+
+    def test_poisson_fit_returns_self(self):
+        glm = GLM(family="poisson", l1_penalty=LAM)
+        result = glm.fit(X, Y_COUNT)
+        assert result is glm
+
+    def test_poisson_beta_shape_with_intercept(self):
+        glm = GLM(family="poisson", l1_penalty=LAM).fit(X, Y_COUNT)
+        assert glm.beta_.shape == (P + 1,)
 
     def test_residuals_computed_after_fit(self):
         glm = GLM(family="linear", l1_penalty=LAM).fit(X, Y_LINEAR)
@@ -270,3 +286,59 @@ class TestGetVar:
         glm = GLM(family="linear", l1_penalty=LAM)
         with pytest.raises(AssertionError):
             glm.get_var(X, Y_LINEAR)
+
+
+# ---------------------------------------------------------------------------
+# Poisson GLM integration tests
+# ---------------------------------------------------------------------------
+
+class TestPoissonGLM:
+    def setup_method(self):
+        self.glm = GLM(family="poisson", l1_penalty=LAM).fit(X, Y_COUNT)
+
+    def test_predict_positive(self):
+        mu = self.glm.predict(X)
+        assert mu.shape == (N,)
+        assert np.all(mu > 0)
+
+    def test_conf_int_shape(self):
+        ci = self.glm.conf_int(X)
+        assert ci.shape == (P + 1, 2)
+
+    def test_conf_int_lower_leq_upper(self):
+        ci = self.glm.conf_int(X)
+        assert np.all(ci[:, 0] <= ci[:, 1])
+
+    def test_conf_int_beta_inside(self):
+        ci = self.glm.conf_int(X)
+        assert np.all(self.glm.beta_ >= ci[:, 0])
+        assert np.all(self.glm.beta_ <= ci[:, 1])
+
+    def test_conf_int_wider_at_higher_level(self):
+        ci_90 = self.glm.conf_int(X, level=0.90)
+        ci_99 = self.glm.conf_int(X, level=0.99)
+        assert np.all((ci_99[:, 1] - ci_99[:, 0]) >= (ci_90[:, 1] - ci_90[:, 0]))
+
+    def test_se_positive(self):
+        se = self.glm.se(X)
+        assert se.shape == (P + 1,)
+        assert np.all(se > 0)
+
+    def test_get_var_heterogeneous_positive(self):
+        var = self.glm.get_var(X, Y_COUNT, error_model="heterogeneous")
+        assert var.shape == (N,)
+        assert np.all(var > 0)
+
+    def test_active_indices_in_range(self):
+        active = self.glm.active()
+        assert np.all(active >= 0) and np.all(active < P)
+
+    def test_matches_direct_regreg_construction(self):
+        from m_estimation_SI.losses import poisson_loss_smooth
+        import regreg.api as rr
+        X_int = np.hstack([np.ones((N, 1)), X])
+        loss = poisson_loss_smooth(X_int, Y_COUNT)
+        penalty = rr.weighted_l1norm([0] + [1] * P, lagrange=LAM)
+        problem = rr.simple_problem(loss, penalty)
+        beta_direct = problem.solve(min_its=50, tol=1e-8)
+        assert np.allclose(self.glm.beta_, beta_direct)

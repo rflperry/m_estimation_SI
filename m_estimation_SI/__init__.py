@@ -2,15 +2,15 @@
 
 The package provides:
 
-* :class:`GLM` — penalized logistic and linear regression with HC1/CR1
-  sandwich standard errors and Wald confidence intervals.
+* :class:`GLM` — penalized logistic, linear, and Poisson regression with
+  HC1/CR1 sandwich standard errors and Wald confidence intervals.
 * :func:`logistic_group_instance` — synthetic data generator for
   group-lasso selective inference experiments.
-* :class:`logistic_loss_smooth`, :class:`least_squares_loss_smooth` —
-  regreg-compatible mean-scaled loss functions.
+* :class:`logistic_loss_smooth`, :class:`least_squares_loss_smooth`,
+  :class:`poisson_loss_smooth` — regreg-compatible mean-scaled loss functions.
 """
 
-from .losses import logistic_loss_smooth, least_squares_loss_smooth  # noqa: F401
+from .losses import logistic_loss_smooth, least_squares_loss_smooth, poisson_loss_smooth  # noqa: F401
 from .penalized_glm import GLM  # noqa: F401
 from .simulation import logistic_group_instance  # noqa: F401
 
@@ -19,4 +19,5 @@ __all__ = [
     "logistic_group_instance",
     "logistic_loss_smooth",
     "least_squares_loss_smooth",
+    "poisson_loss_smooth",
 ]

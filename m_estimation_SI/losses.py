@@ -12,6 +12,7 @@ from regreg.smooth import smooth_atom
 from scipy.special import expit
 
 
+
 class logistic_loss_smooth(smooth_atom):
     """Mean-scaled negative log-likelihood for binary logistic regression.
 
@@ -264,3 +265,130 @@ class least_squares_loss_smooth(smooth_atom):
             ``(y_i - x_i^\\top \\beta)^2`` for each observation.
         """
         return (y - X @ beta) ** 2
+
+
+class poisson_loss_smooth(smooth_atom):
+    """Mean-scaled negative log-likelihood for Poisson regression.
+
+    The loss is
+
+    .. math::
+
+        \\ell(\\beta) = \\frac{1}{n} \\sum_{i=1}^n
+            \\left[ e^{x_i^\\top \\beta} - y_i x_i^\\top \\beta \\right],
+
+    i.e. the mean negative Poisson log-likelihood (constant ``log(y_i!)``
+    terms are dropped as they do not affect optimisation).
+
+    Parameters
+    ----------
+    X : ndarray of shape (n_samples, n_features)
+        Design matrix.  Include an intercept column explicitly if desired.
+    y : ndarray of shape (n_samples,)
+        Non-negative integer count response.
+
+    Raises
+    ------
+    ValueError
+        If any element of ``y`` is negative.
+    """
+
+    def __init__(self, X: np.ndarray, y: np.ndarray):
+        self.X = X
+        self.y = y
+        if np.any(y < 0):
+            raise ValueError(
+                "All counts in y must be non-negative for Poisson regression."
+            )
+        _, p = X.shape
+        super().__init__(shape=(p,))
+
+    def smooth_objective(
+        self,
+        beta: np.ndarray,
+        mode: str = "both",
+        check_feasibility=None,
+    ):
+        """Evaluate the loss and/or its gradient.
+
+        Parameters
+        ----------
+        beta : ndarray of shape (n_features,)
+        mode : {'func', 'grad', 'both'}
+
+        Returns
+        -------
+        f : float
+            Loss value.  Present when *mode* is ``'func'`` or ``'both'``.
+        g : ndarray of shape (n_features,)
+            Gradient.  Present when *mode* is ``'grad'`` or ``'both'``.
+
+        Raises
+        ------
+        ValueError
+            If *mode* is not one of the accepted strings.
+        """
+        Xbeta = self.X @ beta
+        mu = np.exp(Xbeta)
+        f = np.mean(mu - self.y * Xbeta)
+
+        if mode == "func":
+            return f
+
+        g = self.X.T @ (mu - self.y) / self.X.shape[0]
+
+        if mode == "grad":
+            return g
+        if mode == "both":
+            return f, g
+        raise ValueError("mode must be 'func', 'grad', or 'both'")
+
+    def predict_(self, X: np.ndarray, beta: np.ndarray) -> np.ndarray:
+        """Predicted Poisson means.
+
+        Parameters
+        ----------
+        X : ndarray of shape (n_samples, n_features)
+        beta : ndarray of shape (n_features,)
+
+        Returns
+        -------
+        ndarray of shape (n_samples,)
+            Predicted means ``exp(X @ beta)``, all positive.
+        """
+        return np.exp(X @ beta)
+
+    def get_hessian(self, X: np.ndarray, beta: np.ndarray) -> np.ndarray:
+        """Mean-scaled Fisher information matrix.
+
+        Parameters
+        ----------
+        X : ndarray of shape (n_samples, n_features)
+        beta : ndarray of shape (n_features,)
+
+        Returns
+        -------
+        ndarray of shape (n_features, n_features)
+            ``(1/n) X^\\top \\text{diag}(\\mu) X`` where
+            ``mu_i = exp(x_i^\\top beta)``.
+        """
+        mu = self.predict_(X, beta)
+        return (X * mu[:, None]).T @ X / X.shape[0]
+
+    def get_var_(self, X: np.ndarray, beta: np.ndarray, y=None) -> np.ndarray:
+        """Per-observation variance under the Poisson model.
+
+        For Poisson, variance equals the mean.
+
+        Parameters
+        ----------
+        X : ndarray of shape (n_samples, n_features)
+        beta : ndarray of shape (n_features,)
+        y : ignored
+
+        Returns
+        -------
+        ndarray of shape (n_samples,)
+            ``exp(x_i^\\top beta)`` for each observation.
+        """
+        return self.predict_(X, beta)
