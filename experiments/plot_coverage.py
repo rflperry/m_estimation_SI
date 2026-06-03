@@ -72,6 +72,7 @@ def main(
             "thin_gradient": "Thin (grad)",
             "thin_outcomes": "Thinning (Alg 1)",
             "poisson_thinning": "Poisson Thinning",
+            "negbinom_thinning": "NB Thinning",
         }
     )
 
@@ -83,6 +84,7 @@ def main(
         "Thinning (Alg 1)": "#9467bd",
         "Panigrahi et al. [2024]": "#a65628",
         "Poisson Thinning": "#17becf",
+        "NB Thinning": "#bcbd22",
     }
 
     # coverage_df = coverage_df.dropna()

@@ -4,7 +4,12 @@ import numpy as np
 import regreg.api as rr
 from scipy.stats import norm
 from scipy.special import expit
-from .losses import logistic_loss_smooth, least_squares_loss_smooth, poisson_loss_smooth
+from .losses import (
+    logistic_loss_smooth,
+    least_squares_loss_smooth,
+    poisson_loss_smooth,
+    negative_binomial_loss_smooth,
+)
 
 
 class GLM:
@@ -21,10 +26,12 @@ class GLM:
 
     Parameters
     ----------
-    family : {'linear', 'logistic', 'poisson'}
+    family : {'linear', 'logistic', 'poisson', 'negative_binomial'}
         Response distribution.  ``'linear'`` uses least-squares loss;
         ``'logistic'`` uses binary cross-entropy loss;
-        ``'poisson'`` uses Poisson log-likelihood with log link.
+        ``'poisson'`` uses Poisson log-likelihood with log link;
+        ``'negative_binomial'`` uses NB log-likelihood with log link
+        and fixed dispersion ``theta``.
     l1_penalty : float or None, default None
         L1 (lasso) penalty weight ``lambda >= 0``.  ``None`` or ``0``
         fits an unpenalized model.
@@ -44,6 +51,9 @@ class GLM:
         Per-feature L1 penalty weights.  Length must equal the number of
         columns in *X* (excluding any intercept).  ``None`` gives uniform
         weight 1 to all features.
+    theta : float or None, default None
+        Dispersion (size) parameter for ``family='negative_binomial'``.
+        Must be positive.  Ignored for other families.
 
     Attributes
     ----------
@@ -104,6 +114,7 @@ class GLM:
         min_its: int = 50,
         tol: float = 1e-8,
         weights=None,
+        theta=None,
     ):
         self.family = family
         self.l1_penalty = l1_penalty
@@ -112,6 +123,7 @@ class GLM:
         self.tol = tol
         self.intercept = intercept
         self.weights = weights
+        self.theta = theta
 
         self.beta_ = None
         self.loss_ = None
@@ -149,10 +161,16 @@ class GLM:
             self.loss_ = least_squares_loss_smooth(X, y)
         elif self.family == "poisson":
             self.loss_ = poisson_loss_smooth(X, y)
+        elif self.family == "negative_binomial":
+            if self.theta is None:
+                raise ValueError(
+                    "theta must be specified for family='negative_binomial'."
+                )
+            self.loss_ = negative_binomial_loss_smooth(X, y, self.theta)
         else:
             raise ValueError(
                 f"family='{self.family}' is not supported. "
-                "Choose 'linear', 'logistic', or 'poisson'."
+                "Choose 'linear', 'logistic', 'poisson', or 'negative_binomial'."
             )
 
         if self.weights is None:

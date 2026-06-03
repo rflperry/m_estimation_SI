@@ -384,3 +384,138 @@ class poisson_loss_smooth(smooth_atom):
             ``exp(x_i^\\top beta)`` for each observation.
         """
         return self.predict_(X, beta)
+
+
+class negative_binomial_loss_smooth(smooth_atom):
+    """Mean-scaled negative log-likelihood for negative binomial regression.
+
+    The loss is
+
+    .. math::
+
+        \\ell(\\beta) = \\frac{1}{n} \\sum_{i=1}^n
+            \\left[ (\\theta + y_i)\\log(\\theta + e^{x_i^\\top \\beta})
+                    - y_i\\, x_i^\\top \\beta \\right],
+
+    i.e. the mean negative NB log-likelihood with a log link, dropping
+    terms that are constant in :math:`\\beta`.  The dispersion
+    :math:`\\theta > 0` is treated as fixed (known).
+
+    As :math:`\\theta \\to \\infty` the NB approaches Poisson; small
+    :math:`\\theta` corresponds to high overdispersion.
+
+    Parameters
+    ----------
+    X : ndarray of shape (n_samples, n_features)
+        Design matrix.  Include an intercept column explicitly if desired.
+    y : ndarray of shape (n_samples,)
+        Response vector.  Any real value is accepted; negative or continuous
+        values arise naturally in outcome-thinning procedures.
+    theta : float
+        Positive dispersion (size) parameter.
+
+    Raises
+    ------
+    ValueError
+        If ``theta <= 0``.
+    """
+
+    def __init__(self, X: np.ndarray, y: np.ndarray, theta: float):
+        if theta <= 0:
+            raise ValueError(f"theta must be positive, got {theta}")
+        self.X = X
+        self.y = y
+        self.theta = float(theta)
+        _, p = X.shape
+        super().__init__(shape=(p,))
+
+    def smooth_objective(
+        self,
+        beta: np.ndarray,
+        mode: str = "both",
+        check_feasibility=None,
+    ):
+        """Evaluate the loss and/or its gradient.
+
+        Parameters
+        ----------
+        beta : ndarray of shape (n_features,)
+        mode : {'func', 'grad', 'both'}
+
+        Returns
+        -------
+        f : float
+            Loss value.  Present when *mode* is ``'func'`` or ``'both'``.
+        g : ndarray of shape (n_features,)
+            Gradient.  Present when *mode* is ``'grad'`` or ``'both'``.
+
+        Raises
+        ------
+        ValueError
+            If *mode* is not one of the accepted strings.
+        """
+        theta = self.theta
+        Xbeta = self.X @ beta
+        mu = np.exp(Xbeta)
+        f = np.mean((theta + self.y) * np.log(theta + mu) - self.y * Xbeta)
+
+        if mode == "func":
+            return f
+
+        # gradient: (theta / n) * X^T [(mu - y) / (theta + mu)]
+        g = self.X.T @ (theta * (mu - self.y) / (theta + mu)) / self.X.shape[0]
+
+        if mode == "grad":
+            return g
+        if mode == "both":
+            return f, g
+        raise ValueError("mode must be 'func', 'grad', or 'both'")
+
+    def predict_(self, X: np.ndarray, beta: np.ndarray) -> np.ndarray:
+        """Predicted NB means ``exp(X @ beta)``.
+
+        Parameters
+        ----------
+        X : ndarray of shape (n_samples, n_features)
+        beta : ndarray of shape (n_features,)
+
+        Returns
+        -------
+        ndarray of shape (n_samples,)
+            Predicted means, all positive.
+        """
+        return np.exp(X @ beta)
+
+    def get_hessian(self, X: np.ndarray, beta: np.ndarray) -> np.ndarray:
+        """Mean-scaled Fisher information matrix.
+
+        Parameters
+        ----------
+        X : ndarray of shape (n_samples, n_features)
+        beta : ndarray of shape (n_features,)
+
+        Returns
+        -------
+        ndarray of shape (n_features, n_features)
+            ``(1/n) X^\\top \\mathrm{diag}(w) X`` where
+            ``w_i = theta * mu_i / (theta + mu_i)``.
+        """
+        mu = self.predict_(X, beta)
+        w = self.theta * mu / (self.theta + mu)
+        return (X * w[:, None]).T @ X / X.shape[0]
+
+    def get_var_(self, X: np.ndarray, beta: np.ndarray, y=None) -> np.ndarray:
+        """Per-observation variance under the NB model: ``mu + mu^2 / theta``.
+
+        Parameters
+        ----------
+        X : ndarray of shape (n_samples, n_features)
+        beta : ndarray of shape (n_features,)
+        y : ignored
+
+        Returns
+        -------
+        ndarray of shape (n_samples,)
+        """
+        mu = self.predict_(X, beta)
+        return mu + mu ** 2 / self.theta

@@ -2,7 +2,12 @@
 
 import numpy as np
 import pytest
-from m_estimation_SI.losses import logistic_loss_smooth, least_squares_loss_smooth, poisson_loss_smooth
+from m_estimation_SI.losses import (
+    logistic_loss_smooth,
+    least_squares_loss_smooth,
+    poisson_loss_smooth,
+    negative_binomial_loss_smooth,
+)
 
 RNG = np.random.default_rng(0)
 N, P = 80, 5
@@ -10,7 +15,9 @@ X = RNG.standard_normal((N, P))
 BETA = RNG.standard_normal(P)
 Y_BIN = (RNG.standard_normal(N) > 0).astype(float)
 Y_CONT = RNG.standard_normal(N)
-Y_COUNT = RNG.poisson(3, size=N).astype(float)  # Poisson counts
+Y_COUNT = RNG.poisson(3, size=N).astype(float)       # Poisson counts
+THETA_NB = 2.0                                        # NB dispersion
+Y_NB = RNG.negative_binomial(THETA_NB, 0.4, size=N).astype(float)  # NB counts
 
 
 # ---------------------------------------------------------------------------
@@ -210,6 +217,95 @@ class TestPoissonLoss:
         loss = poisson_loss_smooth(X, y_neg)
         f = loss.smooth_objective(self.beta, mode="func")
         assert np.isfinite(f)
+
+    def test_invalid_mode_raises(self):
+        with pytest.raises(ValueError):
+            self.loss.smooth_objective(self.beta, mode="bad")
+
+
+# ---------------------------------------------------------------------------
+# negative_binomial_loss_smooth
+# ---------------------------------------------------------------------------
+
+class TestNegBinLoss:
+    def setup_method(self):
+        self.beta = BETA * 0.1
+        self.loss = negative_binomial_loss_smooth(X, Y_NB, THETA_NB)
+
+    def test_func_mode_returns_scalar(self):
+        f = self.loss.smooth_objective(self.beta, mode="func")
+        assert np.isscalar(f) or f.ndim == 0
+        assert np.isfinite(f)
+
+    def test_grad_mode_returns_correct_shape(self):
+        g = self.loss.smooth_objective(self.beta, mode="grad")
+        assert g.shape == (P,)
+
+    def test_both_mode_consistent_with_separate(self):
+        f_both, g_both = self.loss.smooth_objective(self.beta, mode="both")
+        f_func = self.loss.smooth_objective(self.beta, mode="func")
+        g_grad = self.loss.smooth_objective(self.beta, mode="grad")
+        assert np.isclose(f_both, f_func)
+        assert np.allclose(g_both, g_grad)
+
+    def test_gradient_matches_finite_difference(self):
+        eps = 1e-5
+        _, g = self.loss.smooth_objective(self.beta, mode="both")
+        g_fd = np.zeros(P)
+        for j in range(P):
+            beta_plus = self.beta.copy(); beta_plus[j] += eps
+            beta_minus = self.beta.copy(); beta_minus[j] -= eps
+            f_plus = self.loss.smooth_objective(beta_plus, mode="func")
+            f_minus = self.loss.smooth_objective(beta_minus, mode="func")
+            g_fd[j] = (f_plus - f_minus) / (2 * eps)
+        assert np.allclose(g, g_fd, atol=1e-5)
+
+    def test_predict_is_positive(self):
+        mu = self.loss.predict_(X, self.beta)
+        assert mu.shape == (N,)
+        assert np.all(mu > 0)
+
+    def test_hessian_shape_and_psd(self):
+        H = self.loss.get_hessian(X, self.beta)
+        assert H.shape == (P, P)
+        eigvals = np.linalg.eigvalsh(H)
+        assert np.all(eigvals >= -1e-10)
+
+    def test_hessian_formula(self):
+        mu = np.exp(X @ self.beta)
+        w = THETA_NB * mu / (THETA_NB + mu)
+        expected = (X * w[:, None]).T @ X / N
+        assert np.allclose(self.loss.get_hessian(X, self.beta), expected)
+
+    def test_var_formula(self):
+        mu = np.exp(X @ self.beta)
+        expected = mu + mu ** 2 / THETA_NB
+        assert np.allclose(self.loss.get_var_(X, self.beta), expected)
+
+    def test_var_exceeds_poisson_variance(self):
+        # NB variance > Poisson variance (mu) for any finite theta
+        var = self.loss.get_var_(X, self.beta)
+        mu = np.exp(X @ self.beta)
+        assert np.all(var > mu)
+
+    def test_negative_y_accepted(self):
+        y_neg = np.full(N, -1.0)
+        loss = negative_binomial_loss_smooth(X, y_neg, THETA_NB)
+        f = loss.smooth_objective(self.beta, mode="func")
+        assert np.isfinite(f)
+
+    def test_nonpositive_theta_raises(self):
+        with pytest.raises(ValueError):
+            negative_binomial_loss_smooth(X, Y_NB, theta=0.0)
+
+    def test_large_theta_approaches_poisson(self):
+        # For theta -> inf, NB -> Poisson; gradients should converge.
+        theta_large = 1e6
+        loss_nb = negative_binomial_loss_smooth(X, Y_COUNT, theta_large)
+        loss_p = poisson_loss_smooth(X, Y_COUNT)
+        _, g_nb = loss_nb.smooth_objective(self.beta, mode="both")
+        _, g_p = loss_p.smooth_objective(self.beta, mode="both")
+        assert np.allclose(g_nb, g_p, rtol=1e-4)
 
     def test_invalid_mode_raises(self):
         with pytest.raises(ValueError):
