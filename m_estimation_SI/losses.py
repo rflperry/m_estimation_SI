@@ -285,21 +285,13 @@ class poisson_loss_smooth(smooth_atom):
     X : ndarray of shape (n_samples, n_features)
         Design matrix.  Include an intercept column explicitly if desired.
     y : ndarray of shape (n_samples,)
-        Non-negative integer count response.
-
-    Raises
-    ------
-    ValueError
-        If any element of ``y`` is negative.
+        Response vector.  Typically non-negative integer counts, but any
+        real-valued ``y`` is accepted (e.g. thinned pseudo-outcomes).
     """
 
     def __init__(self, X: np.ndarray, y: np.ndarray):
         self.X = X
         self.y = y
-        if np.any(y < 0):
-            raise ValueError(
-                "All counts in y must be non-negative for Poisson regression."
-            )
         _, p = X.shape
         super().__init__(shape=(p,))
 

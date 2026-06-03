@@ -204,10 +204,12 @@ class TestPoissonLoss:
         var = self.loss.get_var_(X, self.beta)
         assert np.all(var > 0)
 
-    def test_invalid_y_raises(self):
-        y_bad = np.full(N, -1.0)
-        with pytest.raises(ValueError):
-            poisson_loss_smooth(X, y_bad)
+    def test_negative_y_accepted(self):
+        # Negative pseudo-outcomes (e.g. from Gaussian thinning) are allowed.
+        y_neg = np.full(N, -1.0)
+        loss = poisson_loss_smooth(X, y_neg)
+        f = loss.smooth_objective(self.beta, mode="func")
+        assert np.isfinite(f)
 
     def test_invalid_mode_raises(self):
         with pytest.raises(ValueError):

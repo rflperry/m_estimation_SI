@@ -71,6 +71,7 @@ def main(
             "sample_splitting": "Sample Splitting",
             "thin_gradient": "Thin (grad)",
             "thin_outcomes": "Thinning (Alg 1)",
+            "poisson_thinning": "Poisson Thinning",
         }
     )
 
@@ -81,6 +82,7 @@ def main(
         "Thin (grad)": "#d62728",
         "Thinning (Alg 1)": "#9467bd",
         "Panigrahi et al. [2024]": "#a65628",
+        "Poisson Thinning": "#17becf",
     }
 
     # coverage_df = coverage_df.dropna()

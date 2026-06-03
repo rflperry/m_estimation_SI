@@ -197,6 +197,71 @@ def sample_splitting_si(
         ]
 
 
+def poisson_thinning_si(X, Y, mu, penalty, level, gamma, intercept):
+    """Selective inference via Poisson data thinning (Neufeld & Dharamshi).
+
+    Uses the Binomial splitting property of the Poisson distribution: if
+    Y_i ~ Poisson(mu_i) then for epsilon in (0, 1),
+
+      Y_thin[i] | Y[i]  ~  Binomial(Y[i], epsilon)
+      Y_train[i]         =  Y[i] - Y_thin[i]
+
+    are independent, with Y_train ~ Poisson((1-epsilon)*mu) and
+    Y_thin ~ Poisson(epsilon*mu). Selection uses Y_train; inference uses
+    Y_thin. Unlike sample splitting, all n observations contribute to both
+    halves.
+
+    epsilon = gamma / (1 + gamma) mirrors the sample-splitting convention.
+
+    An intercept is always included: Y_thin ~ Poisson(epsilon*mu) =
+    Poisson(exp(X beta + log(epsilon))), so the intercept absorbs log(epsilon)
+    and the slope estimands are identical to those of classic_si.
+    """
+    n, _ = X.shape
+    epsilon = gamma / (1 + gamma)
+
+    # Binomial thinning — requires integer counts
+    Y_int = np.round(Y).astype(int)
+    Y_test = np.random.binomial(Y_int, epsilon).astype(float)
+    Y_train = (Y - Y_test) / (1 - epsilon)
+    Y_test /= epsilon
+
+    if penalty < 0:
+        penalty = select_lambda_by_mse_for_lasso(
+            "poisson", X, Y_train, True, -1 * penalty
+        )
+
+    sel = (
+        GLM(family="poisson", l1_penalty=penalty, intercept=True)
+        .fit(X, Y_train)
+        .active()
+    )
+
+    if len(sel) == 0:
+        return [0, 0, 0, 0, 0, None]
+
+    X_sel = X[:, sel]
+    model = GLM(family="poisson", intercept=True).fit(X_sel, Y_test)
+    beta_est = model.beta_
+    conf_int = model.conf_int(X_sel, level=level)
+    length = conf_int[:, 1] - conf_int[:, 0]
+
+    # Reference: unpenalized Poisson GLM on true means; intercept absorbs any
+    # constant shift so slope coefficients match beta_true on the selected set.
+    beta_sel = GLM(family="poisson", intercept=True).fit(X_sel, mu).beta_
+
+    cover = (beta_sel >= conf_int[:, 0]) & (beta_sel <= conf_int[:, 1])
+    rejects = (0 < conf_int[:, 0]) | (0 > conf_int[:, 1])
+    return [
+        sum(cover),
+        sum(rejects),
+        sum(np.abs(beta_est - beta_sel)),
+        len(sel) + 1,  # +1 for the always-included intercept
+        sum(length),
+        ",".join(map(str, sel)),
+    ]
+
+
 def thin_outcomes_si(
     family,
     X,
@@ -816,38 +881,58 @@ def run_simulation(
         print(f"Error in sample_splitting: {e}")
         results["sample_splitting"] = [None] * 8
 
+    # ----- Poisson thinning -----
+    if family == "poisson":
+        try:
+            results["poisson_thinning"] = poisson_thinning_si(
+                X.copy(),
+                Y,
+                mu,
+                np.sqrt(1 + gamma) * penalty,
+                level,
+                gamma,
+                intercept,
+            )
+            TPR, FDR = selection_accuracy(
+                ",".join(map(str, np.where(beta_true != 0)[0])),
+                results["poisson_thinning"][-1],
+            )
+            results["poisson_thinning"] += [TPR, FDR]
+        except Exception as e:
+            print(f"Error in poisson_thinning: {e}")
+            results["poisson_thinning"] = [None] * 8
+
     # ----- Thinning outcomes -----
     # Gaussian noise thinning is not applicable for Poisson counts: Y + W*gamma
     # can be negative, violating the non-negativity constraint on counts.
     W = np.random.normal(0, 1, size=n)
-    if family != "poisson":
-        try:
-            results["thin_outcomes"], penalty = thin_outcomes_si(
-                family,
-                X.copy(),
-                Y,
-                mu,
-                Y_var,
-                np.sqrt(1 + gamma) * penalty,
-                level,
-                gamma,
-                W.copy(),
-                intercept,
-                error_model,
-                clusters=clusters,
+    try:
+        results["thin_outcomes"], penalty = thin_outcomes_si(
+            family,
+            X.copy(),
+            Y,
+            mu,
+            Y_var,
+            np.sqrt(1 + gamma) * penalty,
+            level,
+            gamma,
+            W.copy(),
+            intercept,
+            error_model,
+            clusters=clusters,
+        )
+        if results["classic"][-1] is not None:
+            TPR, FDR = selection_accuracy(
+                # results["classic"][-3]
+                ",".join(map(str, np.where(beta_true != 0)[0])),
+                results["thin_outcomes"][-1],
             )
-            if results["classic"][-1] is not None:
-                TPR, FDR = selection_accuracy(
-                    # results["classic"][-3]
-                    ",".join(map(str, np.where(beta_true != 0)[0])),
-                    results["thin_outcomes"][-1],
-                )
-                results["thin_outcomes"] += [TPR, FDR]
-            else:
-                results["thin_outcomes"] += [None, None]
-        except Exception as e:
-            print(f"Error in thin_outcomes: {e}")
-            results["thin_outcomes"] = [None] * 8
+            results["thin_outcomes"] += [TPR, FDR]
+        else:
+            results["thin_outcomes"] += [None, None]
+    except Exception as e:
+        print(f"Error in thin_outcomes: {e}")
+        results["thin_outcomes"] = [None] * 8
 
     # ----- Thinning gradient -----
     # try:

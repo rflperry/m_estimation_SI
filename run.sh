@@ -73,7 +73,7 @@ python experiments/plot_coverage.py \
 python experiments/glm_confints.py \
   --p 40 \
   --level 0.90 \
-  --n 100 200 500 1000\
+  --n 100 200 500 1000 \
   --n_reps 1000 \
   --gamma 1 \
   --sparsity 10 \
@@ -83,7 +83,7 @@ python experiments/glm_confints.py \
   > logs/glm_confint_$(date +%Y%m%d-%H%M%S).log 2>&1 &
 
 python experiments/plot_coverage.py \
-  --fname results/glm_confints_p=40_level=0.9_n=100,200,500,1000_reps=1000_gamma=1.0_s=10.0_lam=0.02_fam=poisson_errors=None_mis=None_cluster_size=None_signal=1_dispersion=1_true_noise_var=False.csv \
+  --fname results/glm_confints_p=40_level=0.9_n=100,200,500_reps=50_gamma=1.0_s=10.0_lam=0.02_fam=poisson_errors=None_mis=None_cluster_size=None_signal=1_dispersion=1_true_noise_var=False.csv \
   --out figures/poisson.png \
   --logx
 
