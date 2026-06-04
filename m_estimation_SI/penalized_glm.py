@@ -3,7 +3,7 @@
 import numpy as np
 import regreg.api as rr
 from scipy.stats import norm
-from scipy.special import expit
+from scipy.special import expit, digamma, polygamma
 from .losses import (
     logistic_loss_smooth,
     least_squares_loss_smooth,
@@ -53,7 +53,11 @@ class GLM:
         weight 1 to all features.
     theta : float or None, default None
         Dispersion (size) parameter for ``family='negative_binomial'``.
-        Must be positive.  Ignored for other families.
+        Must be positive.  When ``None``, theta is estimated jointly with
+        the regression coefficients via a two-step IRLS procedure
+        (alternating between optimising β with θ fixed and maximising the
+        profile log-likelihood for θ with β fixed).
+        Ignored for other families.
 
     Attributes
     ----------
@@ -64,6 +68,11 @@ class GLM:
         Response residuals ``y - predict(X)`` on the training data.
     loss_ : smooth_atom
         The regreg loss object (set after :meth:`fit`).
+    theta_ : float or None
+        Fitted dispersion for ``family='negative_binomial'`` (set after
+        :meth:`fit`).  Equals the user-supplied ``theta`` when provided,
+        or the IRLS estimate when ``theta=None``.  ``None`` for all other
+        families.
 
     Examples
     --------
@@ -128,6 +137,7 @@ class GLM:
         self.beta_ = None
         self.loss_ = None
         self.residuals_ = None
+        self.theta_ = None
 
     def fit(self, X: np.ndarray, y: np.ndarray) -> "GLM":
         """Fit the model.
@@ -149,7 +159,11 @@ class GLM:
         """
         n = X.shape[0]
         X_fit = np.hstack([np.ones((n, 1)), X]) if self.intercept else X
-        self._solve_problem(X_fit, y)
+        if self.family == "negative_binomial" and self.theta is None:
+            self._fit_nb_irls(X_fit, y)
+        else:
+            self._solve_problem(X_fit, y)
+        self.theta_ = self.theta if self.family == "negative_binomial" else None
         self.residuals_ = y - self.predict(X)
         return self
 
@@ -162,10 +176,6 @@ class GLM:
         elif self.family == "poisson":
             self.loss_ = poisson_loss_smooth(X, y)
         elif self.family == "negative_binomial":
-            if self.theta is None:
-                raise ValueError(
-                    "theta must be specified for family='negative_binomial'."
-                )
             self.loss_ = negative_binomial_loss_smooth(X, y, self.theta)
         else:
             raise ValueError(
@@ -190,6 +200,93 @@ class GLM:
 
         problem = rr.simple_problem(self.loss_, penalty)
         self.beta_ = problem.solve(quad, min_its=self.min_its, tol=self.tol)
+
+    # ------------------------------------------------------------------
+    # NB theta estimation (IRLS)
+    # ------------------------------------------------------------------
+
+    def _estimate_nb_theta(
+        self,
+        y: np.ndarray,
+        mu: np.ndarray,
+        theta_init: float,
+        max_iter: int = 25,
+        tol: float = 1e-8,
+    ) -> float:
+        """Profile MLE for the NB dispersion theta given fixed means mu.
+
+        Solves the score equation
+
+        .. math::
+
+            \\sum_i \\left[ \\psi(y_i + \\theta) - \\psi(\\theta)
+                + \\log\\frac{\\theta}{\\theta + \\mu_i}
+                + \\frac{\\mu_i - y_i}{\\theta + \\mu_i} \\right] = 0
+
+        via Newton-Raphson on the log scale (guarantees theta > 0).
+        """
+        theta = float(theta_init)
+        for _ in range(max_iter):
+            # Score dL/dtheta
+            score = float(np.sum(
+                digamma(y + theta) - digamma(theta)
+                + np.log(theta / (theta + mu))
+                + (mu - y) / (theta + mu)
+            ))
+            # d²L/dtheta²
+            d2 = float(np.sum(
+                polygamma(1, y + theta) - polygamma(1, theta)
+                + 1.0 / theta - 1.0 / (theta + mu)
+                + (y - mu) / (theta + mu) ** 2
+            ))
+            if d2 >= 0:
+                # Hessian non-negative → not at a proper maximum; stop
+                break
+            # Newton step on log(theta) for guaranteed positivity
+            theta_new = float(np.clip(
+                theta * np.exp(-score / (theta * d2)), 1e-6, 1e6
+            ))
+            if abs(np.log(theta_new) - np.log(theta)) < tol:
+                theta = theta_new
+                break
+            theta = theta_new
+        return theta
+
+    def _fit_nb_irls(
+        self,
+        X_fit: np.ndarray,
+        y: np.ndarray,
+        max_iter: int = 25,
+        irls_tol: float = 1e-6,
+    ):
+        """Alternating IRLS for NB: optimise beta with theta fixed, then update
+        theta by profile MLE.  Writes the converged theta into ``self.theta``
+        so that ``_solve_problem`` (and downstream ``se``/``get_var`` calls)
+        use the correct value.
+        """
+        # Initialise theta from marginal method of moments
+        mean_y = float(np.clip(np.mean(y), 1e-6, None))
+        var_y = float(np.var(y))
+        excess = var_y - mean_y
+        theta = float(np.clip(
+            mean_y ** 2 / excess if excess > 0 else 1e6,
+            0.01, 1e6,
+        ))
+
+        for _ in range(max_iter):
+            old_theta = theta
+            # Step 1: fit beta with current theta
+            self.theta = theta
+            self._solve_problem(X_fit, y)
+            mu = np.exp(X_fit @ self.beta_)
+            # Step 2: profile MLE for theta given current mu
+            theta = self._estimate_nb_theta(y, mu, theta_init=theta)
+            if abs(np.log(theta) - np.log(old_theta)) < irls_tol:
+                break
+
+        # Final solve with the converged theta to keep loss_ consistent
+        self.theta = theta
+        self._solve_problem(X_fit, y)
 
     # ------------------------------------------------------------------
     # Prediction

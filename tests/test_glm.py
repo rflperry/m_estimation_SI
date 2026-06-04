@@ -77,17 +77,27 @@ class TestFit:
         with pytest.raises(ValueError):
             GLM(family="gamma", l1_penalty=LAM).fit(X, Y_BIN)
 
-    def test_nb_missing_theta_raises(self):
-        with pytest.raises(ValueError):
-            GLM(family="negative_binomial", l1_penalty=LAM).fit(X, Y_NB)
-
-    def test_nb_fit_returns_self(self):
+    def test_nb_fit_returns_self_with_theta(self):
         glm = GLM(family="negative_binomial", l1_penalty=LAM, theta=THETA_NB)
+        assert glm.fit(X, Y_NB) is glm
+
+    def test_nb_fit_returns_self_without_theta(self):
+        # theta=None triggers IRLS estimation
+        glm = GLM(family="negative_binomial", l1_penalty=LAM)
         assert glm.fit(X, Y_NB) is glm
 
     def test_nb_beta_shape(self):
         glm = GLM(family="negative_binomial", l1_penalty=LAM, theta=THETA_NB).fit(X, Y_NB)
         assert glm.beta_.shape == (P + 1,)
+
+    def test_nb_theta_estimated_is_positive(self):
+        glm = GLM(family="negative_binomial", l1_penalty=LAM).fit(X, Y_NB)
+        assert glm.theta_ is not None
+        assert glm.theta_ > 0
+
+    def test_nb_theta_estimated_set_on_self(self):
+        glm = GLM(family="negative_binomial", l1_penalty=LAM).fit(X, Y_NB)
+        assert glm.theta == glm.theta_
 
     def test_poisson_fit_returns_self(self):
         glm = GLM(family="poisson", l1_penalty=LAM)
@@ -424,3 +434,56 @@ class TestNegBinGLM:
         glm_nb = GLM(family="negative_binomial", l1_penalty=LAM, theta=1e5).fit(X, Y_COUNT)
         glm_p = GLM(family="poisson", l1_penalty=LAM).fit(X, Y_COUNT)
         assert np.allclose(glm_nb.beta_, glm_p.beta_, atol=1e-3)
+
+
+# ---------------------------------------------------------------------------
+# NB IRLS (automatic theta estimation)
+# ---------------------------------------------------------------------------
+
+class TestNegBinIRLS:
+    """Tests for the two-step IRLS theta estimation path (theta=None)."""
+
+    def test_theta_stored_on_self(self):
+        glm = GLM(family="negative_binomial", l1_penalty=LAM).fit(X, Y_NB)
+        assert glm.theta == glm.theta_
+
+    def test_theta_positive(self):
+        glm = GLM(family="negative_binomial", l1_penalty=LAM).fit(X, Y_NB)
+        assert glm.theta_ > 0
+
+    def test_theta_in_plausible_range(self):
+        # True theta is THETA_NB=3; estimate should be in a wide but sane range
+        glm = GLM(family="negative_binomial", l1_penalty=LAM).fit(X, Y_NB)
+        assert 0.1 < glm.theta_ < 100
+
+    def test_theta_stored_as_scalar(self):
+        glm = GLM(family="negative_binomial", l1_penalty=LAM).fit(X, Y_NB)
+        assert np.isscalar(glm.theta_) or np.ndim(glm.theta_) == 0
+
+    def test_beta_same_shape_as_fixed_theta(self):
+        glm_est = GLM(family="negative_binomial", l1_penalty=LAM).fit(X, Y_NB)
+        glm_fix = GLM(family="negative_binomial", l1_penalty=LAM, theta=THETA_NB).fit(X, Y_NB)
+        assert glm_est.beta_.shape == glm_fix.beta_.shape
+
+    def test_conf_int_valid(self):
+        glm = GLM(family="negative_binomial", l1_penalty=LAM).fit(X, Y_NB)
+        ci = glm.conf_int(X)
+        assert ci.shape == (P + 1, 2)
+        assert np.all(ci[:, 0] <= ci[:, 1])
+
+    def test_loss_consistent_with_estimated_theta(self):
+        # loss_.theta should match the theta stored on self after fit
+        glm = GLM(family="negative_binomial", l1_penalty=LAM).fit(X, Y_NB)
+        assert np.isclose(glm.loss_.theta, glm.theta_)
+
+    def test_irls_improves_over_fixed_poisson(self):
+        # NB log-likelihood at the IRLS solution should be >= at the Poisson fit
+        from m_estimation_SI.losses import negative_binomial_loss_smooth
+        glm_nb = GLM(family="negative_binomial", l1_penalty=0).fit(X, Y_NB)
+        glm_p = GLM(family="poisson", l1_penalty=0).fit(X, Y_NB)
+        X_fit = np.hstack([np.ones((N, 1)), X])
+        loss_nb = negative_binomial_loss_smooth(X_fit, Y_NB, glm_nb.theta_)
+        # NB nll at NB solution <= NB nll at Poisson solution (NB MLE minimises NB loss)
+        f_nb = loss_nb.smooth_objective(glm_nb.beta_, mode="func")
+        f_p = loss_nb.smooth_objective(glm_p.beta_, mode="func")
+        assert f_nb <= f_p + 1e-6
