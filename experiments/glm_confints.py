@@ -838,9 +838,14 @@ def run_simulation(
         # mu was the linear predictor (possibly softplus-transformed for mean misspecification);
         # apply the log link inverse to get Poisson means.
         mu = np.exp(mu)
-        Y = np.random.poisson(mu).astype(float)
+        if dispersion > 1:
+            nb_disp = mu / (dispersion - 1)
+            lambda_i = np.random.gamma(shape=nb_disp, scale=1.0 / nb_disp)
+            Y = np.random.poisson(mu * lambda_i).astype(float)
+        else:
+            Y = np.random.poisson(mu).astype(float)
         if true_noise_var:
-            Y_var = mu  # Poisson variance equals mean
+            Y_var = mu * dispersion # Poisson variance equals mean
 
     elif family == "negative_binomial":
         if misspecified in ("var", "both"):
@@ -853,7 +858,8 @@ def run_simulation(
         mu = np.exp(mu)
         # NB via Gamma-Poisson mixture (supports non-integer dispersion)
         # Solve for: dispersion * mu = mu + mu**2 / np_disp
-        nb_disp = np.mean(mu) / (dispersion - 1)
+        # nb_disp = np.mean(mu) / (dispersion - 1)
+        nb_disp = dispersion
         lambda_i = np.random.gamma(shape=nb_disp, scale=1.0 / nb_disp)
         Y = np.random.poisson(mu * lambda_i).astype(float)
         if true_noise_var:
@@ -898,7 +904,8 @@ def run_simulation(
     penalty = lam * np.sqrt(2 * np.log(p) / n) * np.std(Y)
 
     # Family-specific extra kwargs forwarded to every GLM constructor
-    glm_kwargs = {"theta": dispersion} if family == "negative_binomial" else {}
+    # glm_kwargs = {"theta": dispersion} if family == "negative_binomial" else {}
+    glm_kwargs = {"theta": None} if family == "negative_binomial" else {}
 
     # Store results
     results = {}
