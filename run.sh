@@ -27,8 +27,8 @@ python experiments/plot_coverage.py \
 python experiments/glm_confints.py \
   --p 40 \
   --level 0.90 \
-  --n 100 200 500 1000\
-  --n_reps 1000 \
+  --n 100 200 500\
+  --n_reps 100 \
   --gamma 1 \
   --sparsity 10 \
   --lam 0.02 \
@@ -37,7 +37,7 @@ python experiments/glm_confints.py \
   > logs/glm_confint_$(date +%Y%m%d-%H%M%S).log 2>&1 &
 
 python experiments/plot_coverage.py \
-  --fname results/glm_confints_p=40_level=0.9_n=100,200,500,1000_reps=1000_gamma=1.0_s=10.0_lam=0.02_fam=logistic_errors=None_mis=None_cluster_size=None_signal=1_dispersion=1_true_noise_var=False.csv \
+  --fname results/glm_confints_p=40_level=0.9_n=100,200,500_reps=100_gamma=1.0_s=10.0_lam=0.02_fam=logistic_errors=None_mis=None_cluster_size=None_signal=1_dispersion=1_true_noise_var=False.csv \
   --out figures/logistic.png \
   --logx
 
@@ -67,48 +67,7 @@ python experiments/plot_coverage.py \
 
 
 ###################################################
-# Negative Binomial model, dispersion=2, varying n
-###################################################
-
-python experiments/glm_confints.py \
-  --p 40 \
-  --level 0.90 \
-  --n 100 200 500 \
-  --n_reps 50 \
-  --gamma 1 \
-  --sparsity 10 \
-  --lam 0.02 \
-  --n_jobs 4 \
-  --family negative_binomial \
-  --dispersion 2 \
-  > logs/glm_confint_$(date +%Y%m%d-%H%M%S).log 2>&1 &
-
-python experiments/plot_coverage.py \
-  --fname results/glm_confints_p=40_level=0.9_n=100,200,500_reps=50_gamma=1.0_s=10.0_lam=0.02_fam=negative_binomial_errors=None_mis=None_cluster_size=None_signal=1_dispersion=2_true_noise_var=False.csv \
-  --out figures/negative_binomial_dispersion=2.png \
-  --logx
-
-python experiments/glm_confints.py \
-  --p 40 \
-  --level 0.90 \
-  --n 100 200 500 \
-  --n_reps 50 \
-  --gamma 1 \
-  --sparsity 10 \
-  --lam 0.02 \
-  --n_jobs 4 \
-  --family negative_binomial \
-  --true_noise_var \
-  --dispersion 2 \
-  > logs/glm_confint_$(date +%Y%m%d-%H%M%S).log 2>&1 &
-
-python experiments/plot_coverage.py \
-  --fname results/glm_confints_p=40_level=0.9_n=100,200,500_reps=50_gamma=1.0_s=10.0_lam=0.02_fam=negative_binomial_errors=None_mis=None_cluster_size=None_signal=1_dispersion=2_true_noise_var=True.csv \
-  --out figures/negative_binomial_dispersion=2_true-var.png \
-  --logx
-
-###################################################
-# Poisson model, varying n
+# Poisson model, varying dispersion
 ###################################################
 
 python experiments/glm_confints.py \
@@ -125,7 +84,7 @@ python experiments/glm_confints.py \
 
 python experiments/plot_coverage.py \
   --fname results/glm_confints_p=40_level=0.9_n=100,200,500,1000_reps=1000_gamma=1.0_s=10.0_lam=0.02_fam=poisson_errors=None_mis=None_cluster_size=None_signal=1_dispersion=1_true_noise_var=False.csv \
-  --out figures/poisson.png \
+  --out figures/poisson_nbthin.png \
   --logx
 
 python experiments/glm_confints.py \
@@ -142,11 +101,11 @@ python experiments/glm_confints.py \
   > logs/glm_confint_$(date +%Y%m%d-%H%M%S).log 2>&1 &
 
 python experiments/plot_coverage.py \
-  --fname results/glm_confints_p=40_level=0.9_n=500_reps=100_gamma=1.0_s=10.0_lam=0.02_fam=poisson_errors=None_mis=None_cluster_size=None_signal=1_dispersion=1,2,4,8,10_true_noise_var=False.csv \
-  --out figures/poisson_overdispered.png \
+  --fname results/glm_confints_p=40_level=0.9_n=500_reps=1000_gamma=1.0_s=10.0_lam=0.02_fam=poisson_errors=None_mis=None_cluster_size=None_signal=1_dispersion=1,2,4,8,10_true_noise_var=False.csv \
+  --out figures/poisson_overdispered_nb-thin.png \
   --x "dispersion" \
   --x_label "Overdispersion" \
-  --ncol 4 \
+  --ncol 3 \
   --logx
 
 ###################################################

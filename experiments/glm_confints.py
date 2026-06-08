@@ -280,7 +280,77 @@ def poisson_thinning_si(X, Y, mu, penalty, level, gamma, intercept):
     ]
 
 
-def negbinom_thinning_si(X, Y, mu, penalty, level, gamma, intercept, theta=None):
+def logistic_fission_si(X, Y, mu, penalty, level, gamma, intercept, true_mu=False):
+    """Selective inference via Logistic Fission (Discussion, Neufeld 2025).
+    Epsilon = gamma / (1 + gamma) mirrors the sample-splitting convention.
+    """
+    n, p = X.shape
+
+    if true_mu:
+        mu_hat = mu
+    elif n > p + 1:
+        mu_hat = GLM(family="logistic", intercept=True).fit(X, Y).predict(X)
+    else:  # p > n
+        mu_hat = (
+            GLM(family="logistic", intercept=True, l1_penalty=penalty)
+            .fit(X, Y)
+            .predict(X)
+        )
+
+    # epsilon = gamma / (1 + gamma)
+    epsilon = 0.5 + np.sign(mu_hat - 0.5) * np.sqrt(
+        1 - 4 * mu_hat * (1 - mu_hat) * (1 + gamma)
+    ) / (2 * (1 - 2 * mu_hat))
+    # epsilon = 0.8
+
+    from scipy.stats import bernoulli
+
+    Y = np.round(Y).astype(int)
+    Z = bernoulli.rvs(epsilon)
+    Y_train = (1 - Z) * Y + Z * (1 - Y)
+    Y_test = Y
+
+    if penalty < 0:
+        penalty = select_lambda_by_mse_for_lasso(
+            "logistic", X, Y_train, True, -1 * penalty
+        )
+
+    sel = (
+        GLM(family="logistic", l1_penalty=penalty, intercept=intercept)
+        .fit(X, Y_train)
+        .active()
+    )
+
+    if len(sel) == 0:
+        return [0, 0, 0, 0, 0, None]
+
+    X_sel = X[:, sel]
+    log_ratio = np.log(epsilon / (1 - epsilon))
+    offset = (1 - 2 * Y_train) * log_ratio
+    model = GLM(family="logistic", intercept=intercept, offset=offset).fit(
+        X_sel, Y_test
+    )
+    beta_est = model.beta_
+    conf_int = model.conf_int(X_sel, level=level)
+    length = conf_int[:, 1] - conf_int[:, 0]
+
+    beta_sel = GLM(family="logistic", intercept=intercept).fit(X_sel, mu).beta_
+
+    cover = (beta_sel >= conf_int[:, 0]) & (beta_sel <= conf_int[:, 1])
+    rejects = (0 < conf_int[:, 0]) | (0 > conf_int[:, 1])
+    return [
+        sum(cover),
+        sum(rejects),
+        sum(np.abs(beta_est - beta_sel)),
+        len(sel) + intercept,
+        sum(length),
+        ",".join(map(str, sel)),
+    ]
+
+
+def negbinom_thinning_si(
+    X, Y, mu, penalty, level, gamma, intercept, family, theta=None
+):
     """Selective inference via NB data thinning (Dharamshi et al., Neufeld et al.).
 
     Uses the convolution-closure property of the NB family.  If
@@ -340,7 +410,7 @@ def negbinom_thinning_si(X, Y, mu, penalty, level, gamma, intercept, theta=None)
         )
 
     sel = (
-        GLM(family="negative_binomial", l1_penalty=penalty, intercept=intercept, theta=theta)
+        GLM(family=family, l1_penalty=penalty, intercept=intercept)
         .fit(X, Y_train)
         .active()
     )
@@ -349,14 +419,12 @@ def negbinom_thinning_si(X, Y, mu, penalty, level, gamma, intercept, theta=None)
         return [0, 0, 0, 0, 0, None]
 
     X_sel = X[:, sel]
-    model = GLM(family="negative_binomial", intercept=intercept, theta=theta).fit(X_sel, Y_thin)
+    model = GLM(family=family, intercept=intercept).fit(X_sel, Y_thin)
     beta_est = model.beta_
     conf_int = model.conf_int(X_sel, level=level)
     length = conf_int[:, 1] - conf_int[:, 0]
 
-    beta_sel = (
-        GLM(family="negative_binomial", intercept=intercept, theta=theta).fit(X_sel, mu).beta_
-    )
+    beta_sel = GLM(family=family, intercept=intercept, theta=theta).fit(X_sel, mu).beta_
     cover = (beta_sel >= conf_int[:, 0]) & (beta_sel <= conf_int[:, 1])
     rejects = (0 < conf_int[:, 0]) | (0 > conf_int[:, 1])
     return [
@@ -966,6 +1034,28 @@ def run_simulation(
         print(f"Error in sample_splitting: {e}")
         results["sample_splitting"] = [None] * 8
 
+    # ----- Logistic fission -----
+    if family == "logistic":
+        try:
+            results["logistic_fission"] = logistic_fission_si(
+                X.copy(),
+                Y,
+                mu,
+                np.sqrt(1 + gamma) * penalty,
+                level,
+                gamma,
+                intercept,
+                Y_var is None,
+            )
+            TPR, FDR = selection_accuracy(
+                ",".join(map(str, np.where(beta_true != 0)[0])),
+                results["logistic_fission"][-1],
+            )
+            results["logistic_fission"] += [TPR, FDR]
+        except Exception as e:
+            print(f"Error in logistic_fission: {e}")
+            results["logistic_fission"] = [None] * 8
+
     # ----- Poisson thinning (exact for Poisson; misspecified but valid for NB) -----
     if family in ("poisson", "negative_binomial"):
         try:
@@ -988,7 +1078,8 @@ def run_simulation(
             results["poisson_thinning"] = [None] * 8
 
     # ----- NB thinning (exact for NB via Beta-Binomial splitting) -----
-    if family == "negative_binomial":
+    # if family == "negative_binomial":
+    if family in ("poisson", "negative_binomial"):
         try:
             results["negbinom_thinning"] = negbinom_thinning_si(
                 X.copy(),
@@ -998,6 +1089,7 @@ def run_simulation(
                 level,
                 gamma,
                 intercept,
+                family,
                 theta,
             )
             TPR, FDR = selection_accuracy(
