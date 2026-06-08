@@ -147,6 +147,10 @@ class logistic_loss_smooth(smooth_atom):
         mu = self.predict_(X, beta)
         return mu * (1 - mu)
 
+    def get_model_var_(self, X: np.ndarray, beta: np.ndarray) -> np.ndarray:
+        """GLM variance function V(mu) = mu(1-mu) for the Bernoulli family."""
+        return self.get_var_(X, beta)
+
 
 class least_squares_loss_smooth(smooth_atom):
     """Mean-scaled least-squares loss for linear regression.
@@ -266,6 +270,10 @@ class least_squares_loss_smooth(smooth_atom):
         """
         return (y - X @ beta) ** 2
 
+    def get_model_var_(self, X: np.ndarray, _beta: np.ndarray) -> np.ndarray:
+        """GLM variance function V(mu) = 1 for the Gaussian family."""
+        return np.ones(X.shape[0])
+
 
 class poisson_loss_smooth(smooth_atom):
     """Mean-scaled negative log-likelihood for Poisson regression.
@@ -383,6 +391,10 @@ class poisson_loss_smooth(smooth_atom):
         ndarray of shape (n_samples,)
             ``exp(x_i^\\top beta)`` for each observation.
         """
+        return self.predict_(X, beta)
+
+    def get_model_var_(self, X: np.ndarray, beta: np.ndarray) -> np.ndarray:
+        """GLM variance function V(mu) = mu for the Poisson family."""
         return self.predict_(X, beta)
 
 
@@ -519,3 +531,7 @@ class negative_binomial_loss_smooth(smooth_atom):
         """
         mu = self.predict_(X, beta)
         return mu + mu ** 2 / self.theta
+
+    def get_model_var_(self, X: np.ndarray, beta: np.ndarray) -> np.ndarray:
+        """GLM variance function V(mu) = mu + mu^2/theta for the NB family."""
+        return self.get_var_(X, beta)

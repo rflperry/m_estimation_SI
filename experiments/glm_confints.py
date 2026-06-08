@@ -229,9 +229,9 @@ def poisson_thinning_si(X, Y, mu, penalty, level, gamma, intercept):
 
     epsilon = gamma / (1 + gamma) mirrors the sample-splitting convention.
 
-    An intercept is always included: Y_thin ~ Poisson(epsilon*mu) =
-    Poisson(exp(X beta + log(epsilon))), so the intercept absorbs log(epsilon)
-    and the slope estimands are identical to those of classic_si.
+    Both halves are rescaled by their epsilon factors to restore mean mu,
+    so no intercept offset adjustment is required and the intercept flag
+    is respected as-is.
     """
     n, _ = X.shape
     epsilon = gamma / (1 + gamma)
@@ -274,7 +274,7 @@ def poisson_thinning_si(X, Y, mu, penalty, level, gamma, intercept):
         sum(cover),
         sum(rejects),
         sum(np.abs(beta_est - beta_sel)),
-        len(sel) + 1,  # +1 for the always-included intercept
+        len(sel) + intercept,
         sum(length),
         ",".join(map(str, sel)),
     ]
@@ -296,12 +296,15 @@ def negbinom_thinning_si(X, Y, mu, penalty, level, gamma, intercept, theta=None)
     adjustment is needed.
 
     epsilon = gamma / (1 + gamma) mirrors the sample-splitting convention.
-    An intercept is always included.
+    Both halves are rescaled by their epsilon factors to restore mean mu,
+    so no intercept offset adjustment is required and the intercept flag
+    is respected as-is.
 
     When ``theta`` is ``None`` (the default), it is estimated from the full
     data via an initial unpenalized (n > p) or penalized (n <= p) NB GLM
     fit with IRLS, analogous to how ``thin_outcomes_si`` estimates the
-    working variance when ``Y_var`` is not supplied.
+    working variance when ``Y_var`` is not supplied.  The estimated theta
+    is then used for all subsequent thinning and fitting steps.
     """
     from scipy.stats import betabinom as _betabinom
 
@@ -337,7 +340,7 @@ def negbinom_thinning_si(X, Y, mu, penalty, level, gamma, intercept, theta=None)
         )
 
     sel = (
-        GLM(family="negative_binomial", l1_penalty=penalty, intercept=intercept)
+        GLM(family="negative_binomial", l1_penalty=penalty, intercept=intercept, theta=theta)
         .fit(X, Y_train)
         .active()
     )
@@ -346,7 +349,7 @@ def negbinom_thinning_si(X, Y, mu, penalty, level, gamma, intercept, theta=None)
         return [0, 0, 0, 0, 0, None]
 
     X_sel = X[:, sel]
-    model = GLM(family="negative_binomial", intercept=intercept).fit(X_sel, Y_thin)
+    model = GLM(family="negative_binomial", intercept=intercept, theta=theta).fit(X_sel, Y_thin)
     beta_est = model.beta_
     conf_int = model.conf_int(X_sel, level=level)
     length = conf_int[:, 1] - conf_int[:, 0]
@@ -360,7 +363,7 @@ def negbinom_thinning_si(X, Y, mu, penalty, level, gamma, intercept, theta=None)
         sum(cover),
         sum(rejects),
         sum(np.abs(beta_est - beta_sel)),
-        len(sel) + 1,  # +1 for always-included intercept
+        len(sel) + intercept,
         sum(length),
         ",".join(map(str, sel)),
     ]
@@ -385,19 +388,23 @@ def thin_outcomes_si(
     if glm_kwargs is None:
         glm_kwargs = {}
 
+    # Use overdispersed variance for Poisson to account for extra-Poisson variation
+    # in the noise scaling; for other families the model variance is already adequate.
+    overdispersed = family == "poisson"
+
     if Y_var is not None:
         Y_var_noise = Y_var
     elif X.shape[0] > X.shape[1] + 1:  # n > p
         Y_var_noise = (
             GLM(family=family, intercept=True, **glm_kwargs)
             .fit(X, Y)
-            .get_var(X, Y, error_model, clusters=clusters)
+            .get_var(X, Y, error_model, clusters=clusters, overdispersed=overdispersed)
         )
     else:  # p > n
         Y_var_noise = (
             GLM(family=family, intercept=True, l1_penalty=penalty, **glm_kwargs)
             .fit(X, Y)
-            .get_var(X, Y, error_model, clusters=clusters)
+            .get_var(X, Y, error_model, clusters=clusters, overdispersed=overdispersed)
         )
 
     if clusters is not None:
@@ -845,7 +852,9 @@ def run_simulation(
         else:
             Y = np.random.poisson(mu).astype(float)
         if true_noise_var:
-            Y_var = mu * dispersion # Poisson variance equals mean
+            # Poisson variance equals mean. Otherwise,
+            # the overdisped NB variance, mu + mu**2 / nb_disp.
+            Y_var = mu * dispersion
 
     elif family == "negative_binomial":
         if misspecified in ("var", "both"):

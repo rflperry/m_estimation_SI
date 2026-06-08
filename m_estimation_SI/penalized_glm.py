@@ -73,6 +73,13 @@ class GLM:
         :meth:`fit`).  Equals the user-supplied ``theta`` when provided,
         or the IRLS estimate when ``theta=None``.  ``None`` for all other
         families.
+    phi_ : float
+        Pearson overdispersion estimate (set after :meth:`fit`).
+        Computed as ``(1 / dof) * sum((y - mu)^2 / V(mu))`` where
+        ``V(mu)`` is the GLM variance function and ``dof = n - p``
+        (number of non-zero coefficients).  A value near 1 indicates a
+        well-calibrated model; values appreciably above 1 indicate
+        overdispersion relative to the fitted family.
 
     Examples
     --------
@@ -138,6 +145,7 @@ class GLM:
         self.loss_ = None
         self.residuals_ = None
         self.theta_ = None
+        self.phi_ = None
 
     def fit(self, X: np.ndarray, y: np.ndarray) -> "GLM":
         """Fit the model.
@@ -165,6 +173,11 @@ class GLM:
             self._solve_problem(X_fit, y)
         self.theta_ = self.theta if self.family == "negative_binomial" else None
         self.residuals_ = y - self.predict(X)
+        # Pearson overdispersion: (1/dof) * sum((y - mu)^2 / V(mu))
+        mu_fit = self.loss_.predict_(X_fit, self.beta_)
+        V_fit = self.loss_.get_model_var_(X_fit, self.beta_)
+        dof = max(X_fit.shape[0] - int(np.sum(self.beta_ != 0)), 1)
+        self.phi_ = float(np.sum((y - mu_fit) ** 2 / np.maximum(V_fit, 1e-10)) / dof)
         return self
 
     def _solve_problem(self, X: np.ndarray, y: np.ndarray):
@@ -348,6 +361,7 @@ class GLM:
         Y: np.ndarray,
         error_model=None,
         clusters=None,
+        overdispersed: bool = False,
     ):
         """Estimate outcome variances under a working error model.
 
@@ -369,6 +383,12 @@ class GLM:
         clusters : ndarray of shape (n_samples,) or None
             Integer cluster labels.  Required when
             ``error_model='clustered'``.
+        overdispersed : bool, default False
+            If ``True``, scale the model-based variance by the fitted
+            Pearson overdispersion ``phi_``, i.e. return
+            ``phi_ * V(mu_i)`` per observation.  This replaces the
+            raw ``get_var_`` estimate and is applied before any
+            ``error_model`` pooling.
 
         Returns
         -------
@@ -386,7 +406,10 @@ class GLM:
         X_fit = np.hstack([np.ones((X.shape[0], 1)), X]) if self.intercept else X
         n, p = X_fit.shape
 
-        var_est = self.loss_.get_var_(X_fit, self.beta_, Y)
+        if overdispersed:
+            var_est = self.phi_ * self.loss_.get_model_var_(X_fit, self.beta_)
+        else:
+            var_est = self.loss_.get_var_(X_fit, self.beta_, Y)
 
         if error_model == "homogeneous":
             pdim = np.sum(self.beta_ != 0)

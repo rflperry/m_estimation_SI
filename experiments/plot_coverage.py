@@ -47,7 +47,7 @@ def load_data(fname):
 
 # %%
 def main(
-    fname, out_path, ref=None, level=0.9, x="n", x_label="Sample Size (n)", logx=False, exclude=None
+    fname, out_path, ref=None, level=0.9, x="n", x_label="Sample Size (n)", logx=False, exclude=None, ncol=3,
 ):
 
     coverage_df = load_data(fname)
@@ -205,7 +205,7 @@ def main(
         hue_handles[1:],  # removes "title"
         hue_labels[1:],
         loc="lower center",
-        ncol=3,#len(hue_labels),
+        ncol=ncol,#len(hue_labels),
         bbox_to_anchor=(0.5, -0.22),
         title = "",
         # frameon=False,
@@ -248,6 +248,7 @@ if __name__ == "__main__":
     parser.add_argument("--exclude", type=str, default=None)
     parser.add_argument("--x_label", type=str, default="Sample Size (n)")
     parser.add_argument("--logx", action="store_true", default=False)
+    parser.add_argument("--ncol", type=int, default=3)
     args = parser.parse_args()
 
     main(
@@ -258,6 +259,7 @@ if __name__ == "__main__":
         x_label=args.x_label,
         logx=args.logx,
         exclude=args.exclude,
+        ncol=args.ncol,
     )
 
 # %%
