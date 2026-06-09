@@ -58,6 +58,11 @@ class GLM:
         (alternating between optimising β with θ fixed and maximising the
         profile log-likelihood for θ with β fixed).
         Ignored for other families.
+    offset : ndarray of shape (n_samples,) or None, default None
+        Fixed term added to the linear predictor before the link function,
+        with its coefficient constrained to 1.  ``None`` means no offset.
+        Useful for incorporating known exposure terms (e.g. ``log(t_i)``
+        for Poisson rate models) or for logistic fission.
 
     Attributes
     ----------
@@ -131,6 +136,7 @@ class GLM:
         tol: float = 1e-8,
         weights=None,
         theta=None,
+        offset=None,
     ):
         self.family = family
         self.l1_penalty = l1_penalty
@@ -140,6 +146,7 @@ class GLM:
         self.intercept = intercept
         self.weights = weights
         self.theta = theta
+        self.offset = offset
 
         self.beta_ = None
         self.loss_ = None
@@ -172,9 +179,10 @@ class GLM:
         else:
             self._solve_problem(X_fit, y)
         self.theta_ = self.theta if self.family == "negative_binomial" else None
-        self.residuals_ = y - self.predict(X)
+        fitted = self.loss_._fitted_values(self.beta_)
+        self.residuals_ = y - fitted
         # Pearson overdispersion: (1/dof) * sum((y - mu)^2 / V(mu))
-        mu_fit = self.loss_.predict_(X_fit, self.beta_)
+        mu_fit = fitted
         V_fit = self.loss_.get_model_var_(X_fit, self.beta_)
         dof = max(X_fit.shape[0] - int(np.sum(self.beta_ != 0)), 1)
         self.phi_ = float(np.sum((y - mu_fit) ** 2 / np.maximum(V_fit, 1e-10)) / dof)
@@ -182,14 +190,17 @@ class GLM:
 
     def _solve_problem(self, X: np.ndarray, y: np.ndarray):
         """Build and solve the regreg problem on the (possibly augmented) design."""
+        offset = (
+            np.asarray(self.offset, dtype=float) if self.offset is not None else None
+        )
         if self.family == "logistic":
-            self.loss_ = logistic_loss_smooth(X, y)
+            self.loss_ = logistic_loss_smooth(X, y, offset=offset)
         elif self.family == "linear":
-            self.loss_ = least_squares_loss_smooth(X, y)
+            self.loss_ = least_squares_loss_smooth(X, y, offset=offset)
         elif self.family == "poisson":
-            self.loss_ = poisson_loss_smooth(X, y)
+            self.loss_ = poisson_loss_smooth(X, y, offset=offset)
         elif self.family == "negative_binomial":
-            self.loss_ = negative_binomial_loss_smooth(X, y, self.theta)
+            self.loss_ = negative_binomial_loss_smooth(X, y, self.theta, offset=offset)
         else:
             raise ValueError(
                 f"family='{self.family}' is not supported. "
@@ -291,7 +302,7 @@ class GLM:
             # Step 1: fit beta with current theta
             self.theta = theta
             self._solve_problem(X_fit, y)
-            mu = np.exp(X_fit @ self.beta_)
+            mu = self.loss_._fitted_values(self.beta_)
             # Step 2: profile MLE for theta given current mu
             theta = self._estimate_nb_theta(y, mu, theta_init=theta)
             if abs(np.log(theta) - np.log(old_theta)) < irls_tol:

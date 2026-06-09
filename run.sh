@@ -27,8 +27,8 @@ python experiments/plot_coverage.py \
 python experiments/glm_confints.py \
   --p 40 \
   --level 0.90 \
-  --n 100 200 500\
-  --n_reps 100 \
+  --n 100 200 500 1000\
+  --n_reps 1000 \
   --gamma 1 \
   --sparsity 10 \
   --lam 0.02 \

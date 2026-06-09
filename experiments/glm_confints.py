@@ -298,10 +298,13 @@ def logistic_fission_si(X, Y, mu, penalty, level, gamma, intercept, true_mu=Fals
         )
 
     # epsilon = gamma / (1 + gamma)
-    epsilon = 0.5 + np.sign(mu_hat - 0.5) * np.sqrt(
-        1 - 4 * mu_hat * (1 - mu_hat) * (1 + gamma)
-    ) / (2 * (1 - 2 * mu_hat))
-    # epsilon = 0.8
+    epsilon = 0.5 + np.sqrt(
+        np.maximum(0, 1 - 4 * mu_hat * (1 - mu_hat) * (1 + gamma))
+    ) / np.abs(2 * (1 - 2 * mu_hat))
+    epsilon[epsilon >= 1] = 0.95
+
+    # epsilon = 1 - 0.2 * np.sqrt(100 / n)
+    epsilon = 0.8
 
     from scipy.stats import bernoulli
 
@@ -484,6 +487,23 @@ def thin_outcomes_si(
         penalty = select_lambda_by_mse_for_lasso(
             family, X, Y + W * gamma, intercept, -1 * penalty
         )
+    
+    # Thinning with different noise
+    # n, p = X.shape
+    # if Y_var is not None:
+    #     mu_hat = mu
+    # elif n > p + 1:
+    #     mu_hat = GLM(family="logistic", intercept=True).fit(X, Y).predict(X)
+    # else:  # p > n
+    #     mu_hat = (
+    #         GLM(family="logistic", intercept=True, l1_penalty=penalty)
+    #         .fit(X, Y)
+    #         .predict(X)
+    #     )
+    
+    # from scipy.stats import bernoulli
+
+    # W = bernoulli.rvs(mu_hat) - mu_hat
 
     sel = (
         GLM(family=family, l1_penalty=penalty, intercept=intercept, **glm_kwargs)
@@ -1035,26 +1055,26 @@ def run_simulation(
         results["sample_splitting"] = [None] * 8
 
     # ----- Logistic fission -----
-    if family == "logistic":
-        try:
-            results["logistic_fission"] = logistic_fission_si(
-                X.copy(),
-                Y,
-                mu,
-                np.sqrt(1 + gamma) * penalty,
-                level,
-                gamma,
-                intercept,
-                Y_var is None,
-            )
-            TPR, FDR = selection_accuracy(
-                ",".join(map(str, np.where(beta_true != 0)[0])),
-                results["logistic_fission"][-1],
-            )
-            results["logistic_fission"] += [TPR, FDR]
-        except Exception as e:
-            print(f"Error in logistic_fission: {e}")
-            results["logistic_fission"] = [None] * 8
+    # if family == "logistic":
+    #     try:
+    #         results["logistic_fission"] = logistic_fission_si(
+    #             X.copy(),
+    #             Y,
+    #             mu,
+    #             np.sqrt(1 + gamma) * penalty,
+    #             level,
+    #             gamma,
+    #             intercept,
+    #             Y_var is not None,
+    #         )
+    #         TPR, FDR = selection_accuracy(
+    #             ",".join(map(str, np.where(beta_true != 0)[0])),
+    #             results["logistic_fission"][-1],
+    #         )
+    #         results["logistic_fission"] += [TPR, FDR]
+    #     except Exception as e:
+    #         print(f"Error in logistic_fission: {e}")
+    #         results["logistic_fission"] = [None] * 8
 
     # ----- Poisson thinning (exact for Poisson; misspecified but valid for NB) -----
     if family in ("poisson", "negative_binomial"):

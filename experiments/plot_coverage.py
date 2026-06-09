@@ -70,9 +70,10 @@ def main(
             "rsc_exact": "Panigrahi et al. [2024]",  # Bakshi et al. [2024] for logistic
             "sample_splitting": "Sample Splitting",
             "thin_gradient": "Thin (grad)",
-            "thin_outcomes": "Thinning (Alg 1)",
+            "thin_outcomes": "Score Thinning (Alg 1)",
             "poisson_thinning": "Poisson Thinning",
             "negbinom_thinning": "NB Thinning",
+            "logistic_fission": "Neufeld et al. [2025]",
         }
     )
 
@@ -81,10 +82,11 @@ def main(
         "Huang et al. [2024]": "#ff7f0e",
         "Sample Splitting": "#2ca02c",
         "Thin (grad)": "#d62728",
-        "Thinning (Alg 1)": "#9467bd",
+        "Score Thinning (Alg 1)": "#9467bd",
         "Panigrahi et al. [2024]": "#a65628",
         "Poisson Thinning": "#17becf",
         "NB Thinning": "#bcbd22",
+        "Neufeld et al. [2025]": "#a65628",
     }
 
     # coverage_df = coverage_df.dropna()
