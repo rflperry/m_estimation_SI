@@ -84,7 +84,7 @@ python experiments/glm_confints.py \
 
 python experiments/plot_coverage.py \
   --fname results/glm_confints_p=40_level=0.9_n=100,200,500,1000_reps=1000_gamma=1.0_s=10.0_lam=0.02_fam=poisson_errors=None_mis=None_cluster_size=None_signal=1_dispersion=1_true_noise_var=False.csv \
-  --out figures/poisson_nbthin.png \
+  --out figures/poisson.png \
   --logx
 
 python experiments/glm_confints.py \
@@ -102,7 +102,7 @@ python experiments/glm_confints.py \
 
 python experiments/plot_coverage.py \
   --fname results/glm_confints_p=40_level=0.9_n=500_reps=1000_gamma=1.0_s=10.0_lam=0.02_fam=poisson_errors=None_mis=None_cluster_size=None_signal=1_dispersion=1,2,4,8,10_true_noise_var=False.csv \
-  --out figures/poisson_overdispered_nb-thin.png \
+  --out figures/poisson_overdispersed.png \
   --x "dispersion" \
   --x_label "Overdispersion" \
   --ncol 3 \
