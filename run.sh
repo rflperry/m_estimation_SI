@@ -106,6 +106,7 @@ python experiments/plot_coverage.py \
   --x "dispersion" \
   --x_label "Overdispersion" \
   --ncol 3 \
+  --exclude "poisson_thinning" \
   --logx
 
 ###################################################

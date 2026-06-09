@@ -59,23 +59,19 @@ def main(
         ref_df = ref_df[~ref_df["method"].isin(["classic", "sample_splitting"])]
         coverage_df = pd.concat([coverage_df, ref_df], axis=0)
 
-    if exclude is not None:
-        coverage_df = coverage_df[~coverage_df["method"].isin([exclude])]
-
     coverage_df.rename(columns={"method": "Method"}, inplace=True)
-    coverage_df["Method"] = coverage_df["Method"].replace(
-        {
-            "classic": "Classic",
-            "rsc": "Huang et al. [2024]",
-            "rsc_exact": "Panigrahi et al. [2024]",  # Bakshi et al. [2024] for logistic
-            "sample_splitting": "Sample Splitting",
-            "thin_gradient": "Thin (grad)",
-            "thin_outcomes": "Score Thinning (Alg 1)",
-            "poisson_thinning": "Poisson Thinning",
-            "negbinom_thinning": "NB Thinning",
-            "logistic_fission": "Neufeld et al. [2025]",
-        }
-    )
+    method_names = {
+        "classic": "Classic",
+        "rsc": "Huang et al. [2024]",
+        "rsc_exact": "Panigrahi et al. [2024]",  # Bakshi et al. [2024] for logistic
+        "sample_splitting": "Sample Splitting",
+        "thin_gradient": "Thin (grad)",
+        "thin_outcomes": "Score Thinning (Alg 1)",
+        "poisson_thinning": "Poisson Thinning",
+        "negbinom_thinning": "NB Thinning",
+        "logistic_fission": "Neufeld et al. [2025]",
+    }
+    coverage_df["Method"] = coverage_df["Method"].replace(method_names)
 
     method_colors = {
         "Classic": "#1f77b4",
@@ -117,9 +113,14 @@ def main(
     axes[0].axhline(level, color="black", linestyle="--", linewidth=1)
     axes[0].set_ylabel("Coverage")
     # axes[0].set_ylim(0, 1.05)
+    
+    if exclude is not None:
+        exclude = [method_names[exclude], "Classic"]
+    else:
+        exclude = ["Classic"]
 
     sns.boxplot(
-        data=coverage_df[coverage_df["Method"] != "Classic"],
+        data=coverage_df[~coverage_df["Method"].isin(exclude)],
         x=x,
         y="length",
         hue="Method",
@@ -176,7 +177,7 @@ def main(
     # axes[2].set_ylabel("Mean TPR")
 
     sns.lineplot(
-        data=coverage_df[coverage_df["Method"] != "Classic"],
+        data=coverage_df[~coverage_df["Method"].isin(exclude)],
         x=x,
         y="FDR",
         hue="Method",
