@@ -51,6 +51,10 @@ class GLM:
         Per-feature L1 penalty weights.  Length must equal the number of
         columns in *X* (excluding any intercept).  ``None`` gives uniform
         weight 1 to all features.
+    obs_weights : array-like of shape (n_samples,) or None, default None
+        Per-observation loss weights.  Each observation's contribution to
+        the objective, gradient, and Hessian is multiplied by its weight.
+        ``None`` gives uniform weight 1 to all observations.
     theta : float or None, default None
         Dispersion (size) parameter for ``family='negative_binomial'``.
         Must be positive.  When ``None``, theta is estimated jointly with
@@ -137,6 +141,7 @@ class GLM:
         weights=None,
         theta=None,
         offset=None,
+        obs_weights=None,
     ):
         self.family = family
         self.l1_penalty = l1_penalty
@@ -147,6 +152,7 @@ class GLM:
         self.weights = weights
         self.theta = theta
         self.offset = offset
+        self.obs_weights = obs_weights
 
         self.beta_ = None
         self.loss_ = None
@@ -193,14 +199,17 @@ class GLM:
         offset = (
             np.asarray(self.offset, dtype=float) if self.offset is not None else None
         )
+        obs_weights = (
+            np.asarray(self.obs_weights, dtype=float) if self.obs_weights is not None else None
+        )
         if self.family == "logistic":
-            self.loss_ = logistic_loss_smooth(X, y, offset=offset)
+            self.loss_ = logistic_loss_smooth(X, y, offset=offset, obs_weights=obs_weights)
         elif self.family == "linear":
-            self.loss_ = least_squares_loss_smooth(X, y, offset=offset)
+            self.loss_ = least_squares_loss_smooth(X, y, offset=offset, obs_weights=obs_weights)
         elif self.family == "poisson":
-            self.loss_ = poisson_loss_smooth(X, y, offset=offset)
+            self.loss_ = poisson_loss_smooth(X, y, offset=offset, obs_weights=obs_weights)
         elif self.family == "negative_binomial":
-            self.loss_ = negative_binomial_loss_smooth(X, y, self.theta, offset=offset)
+            self.loss_ = negative_binomial_loss_smooth(X, y, self.theta, offset=offset, obs_weights=obs_weights)
         else:
             raise ValueError(
                 f"family='{self.family}' is not supported. "
@@ -506,9 +515,13 @@ class GLM:
         n, p = X_fit.shape
         H_inv = np.linalg.inv(self.loss_.get_hessian(X_fit, self.beta_))
 
+        # Weighted score contributions: w_i * r_i drives the meat
+        obs_weights = self.loss_.obs_weights  # shape (n,)
+        wr = obs_weights * self.residuals_
+
         if clusters is None:
             # HC1 heteroskedasticity-robust meat
-            Sigma = X_fit.T @ np.diag(self.residuals_**2) @ X_fit * (n - 1) / (n - p) / n
+            Sigma = X_fit.T @ np.diag(wr**2) @ X_fit * (n - 1) / (n - p) / n
         else:
             # CR1 cluster-robust meat
             unique_clusters = np.unique(clusters)
@@ -516,7 +529,7 @@ class GLM:
             Sigma = np.zeros((p, p))
             for g in unique_clusters:
                 idx = np.where(clusters == g)[0]
-                Xg, Rg = X_fit[idx], self.residuals_[idx]
+                Xg, Rg = X_fit[idx], wr[idx]
                 Sigma += Xg.T @ np.outer(Rg, Rg) @ Xg
             Sigma *= (G / (G - 1)) * ((n - 1) / (n - p)) / n
 

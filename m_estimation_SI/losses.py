@@ -21,9 +21,9 @@ class logistic_loss_smooth(smooth_atom):
     .. math::
 
         \\ell(\\beta) = \\frac{1}{n} \\sum_{i=1}^n
-            \\left[ \\log(1 + e^{x_i^\\top \\beta}) - y_i x_i^\\top \\beta \\right],
+            w_i \\left[ \\log(1 + e^{x_i^\\top \\beta}) - y_i x_i^\\top \\beta \\right],
 
-    i.e. the mean negative Bernoulli log-likelihood.
+    i.e. the weighted mean negative Bernoulli log-likelihood.
 
     Parameters
     ----------
@@ -31,6 +31,8 @@ class logistic_loss_smooth(smooth_atom):
         Design matrix.  Include an intercept column explicitly if desired.
     y : ndarray of shape (n_samples,)
         Binary response with values in ``{0, 1}``.
+    obs_weights : ndarray of shape (n_samples,) or None
+        Per-observation loss weights ``w_i``.  ``None`` defaults to all ones.
 
     Raises
     ------
@@ -44,7 +46,7 @@ class logistic_loss_smooth(smooth_atom):
     used by :class:`~m_estimation_SI.GLM`.
     """
 
-    def __init__(self, X: np.ndarray, y: np.ndarray, offset=None):
+    def __init__(self, X: np.ndarray, y: np.ndarray, offset=None, obs_weights=None):
         self.X = X
         self.y = y
         n, p = X.shape
@@ -54,6 +56,7 @@ class logistic_loss_smooth(smooth_atom):
                 "the logistic log-likelihood is not convex."
             )
         self._glm_offset = np.zeros(n) if offset is None else np.asarray(offset, dtype=float)
+        self.obs_weights = np.ones(n) if obs_weights is None else np.asarray(obs_weights, dtype=float)
         super().__init__(shape=(p,))
 
     def smooth_objective(
@@ -85,12 +88,12 @@ class logistic_loss_smooth(smooth_atom):
             If *mode* is not one of the accepted strings.
         """
         eta = self.X @ beta + self._glm_offset
-        f = np.mean(np.logaddexp(0, eta) - self.y * eta)
+        f = np.mean(self.obs_weights * (np.logaddexp(0, eta) - self.y * eta))
 
         if mode == "func":
             return f
 
-        g = self.X.T @ (expit(eta) - self.y) / self.X.shape[0]
+        g = self.X.T @ (self.obs_weights * (expit(eta) - self.y)) / self.X.shape[0]
 
         if mode == "grad":
             return g
@@ -133,7 +136,7 @@ class logistic_loss_smooth(smooth_atom):
             ``mu_i = sigmoid(x_i^\\top beta + offset_i)``.
         """
         mu = expit(X @ beta + self._glm_offset)
-        return (X * (mu * (1 - mu))[:, None]).T @ X / X.shape[0]
+        return (X * (self.obs_weights * mu * (1 - mu))[:, None]).T @ X / X.shape[0]
 
     def get_var_(self, X: np.ndarray, beta: np.ndarray, y=None) -> np.ndarray:
         """Per-observation variance under the logistic model.
@@ -181,11 +184,12 @@ class least_squares_loss_smooth(smooth_atom):
     used by :class:`~m_estimation_SI.GLM`.
     """
 
-    def __init__(self, X: np.ndarray, y: np.ndarray, offset=None):
+    def __init__(self, X: np.ndarray, y: np.ndarray, offset=None, obs_weights=None):
         self.X = X
         self.y = y
         n, p = X.shape
         self._glm_offset = np.zeros(n) if offset is None else np.asarray(offset, dtype=float)
+        self.obs_weights = np.ones(n) if obs_weights is None else np.asarray(obs_weights, dtype=float)
         super().__init__(shape=(p,))
 
     def smooth_objective(
@@ -218,12 +222,12 @@ class least_squares_loss_smooth(smooth_atom):
         """
         n = self.X.shape[0]
         residuals = self.y - (self.X @ beta + self._glm_offset)
-        f = 0.5 * np.mean(residuals**2)
+        f = 0.5 * np.mean(self.obs_weights * residuals**2)
 
         if mode == "func":
             return f
 
-        g = -self.X.T @ residuals / n
+        g = -self.X.T @ (self.obs_weights * residuals) / n
 
         if mode == "grad":
             return g
@@ -258,7 +262,7 @@ class least_squares_loss_smooth(smooth_atom):
         ndarray of shape (n_features, n_features)
             ``(1/n) X^\\top X``.
         """
-        return X.T @ X / X.shape[0]
+        return (X * self.obs_weights[:, None]).T @ X / X.shape[0]
 
     def get_var_(self, X: np.ndarray, beta: np.ndarray, y: np.ndarray) -> np.ndarray:
         """Per-observation squared residuals.
@@ -308,11 +312,12 @@ class poisson_loss_smooth(smooth_atom):
         real-valued ``y`` is accepted (e.g. thinned pseudo-outcomes).
     """
 
-    def __init__(self, X: np.ndarray, y: np.ndarray, offset=None):
+    def __init__(self, X: np.ndarray, y: np.ndarray, offset=None, obs_weights=None):
         self.X = X
         self.y = y
         n, p = X.shape
         self._glm_offset = np.zeros(n) if offset is None else np.asarray(offset, dtype=float)
+        self.obs_weights = np.ones(n) if obs_weights is None else np.asarray(obs_weights, dtype=float)
         super().__init__(shape=(p,))
 
     def smooth_objective(
@@ -342,12 +347,12 @@ class poisson_loss_smooth(smooth_atom):
         """
         eta = self.X @ beta + self._glm_offset
         mu = np.exp(eta)
-        f = np.mean(mu - self.y * eta)
+        f = np.mean(self.obs_weights * (mu - self.y * eta))
 
         if mode == "func":
             return f
 
-        g = self.X.T @ (mu - self.y) / self.X.shape[0]
+        g = self.X.T @ (self.obs_weights * (mu - self.y)) / self.X.shape[0]
 
         if mode == "grad":
             return g
@@ -389,7 +394,7 @@ class poisson_loss_smooth(smooth_atom):
             ``mu_i = exp(x_i^\\top beta + offset_i)``.
         """
         mu = np.exp(X @ beta + self._glm_offset)
-        return (X * mu[:, None]).T @ X / X.shape[0]
+        return (X * (self.obs_weights * mu)[:, None]).T @ X / X.shape[0]
 
     def get_var_(self, X: np.ndarray, beta: np.ndarray, _y=None) -> np.ndarray:
         """Per-observation Poisson variance (equals the fitted mean).
@@ -445,7 +450,7 @@ class negative_binomial_loss_smooth(smooth_atom):
         If ``theta <= 0``.
     """
 
-    def __init__(self, X: np.ndarray, y: np.ndarray, theta: float, offset=None):
+    def __init__(self, X: np.ndarray, y: np.ndarray, theta: float, offset=None, obs_weights=None):
         if theta <= 0:
             raise ValueError(f"theta must be positive, got {theta}")
         self.X = X
@@ -453,6 +458,7 @@ class negative_binomial_loss_smooth(smooth_atom):
         self.theta = float(theta)
         n, p = X.shape
         self._glm_offset = np.zeros(n) if offset is None else np.asarray(offset, dtype=float)
+        self.obs_weights = np.ones(n) if obs_weights is None else np.asarray(obs_weights, dtype=float)
         super().__init__(shape=(p,))
 
     def smooth_objective(
@@ -483,13 +489,13 @@ class negative_binomial_loss_smooth(smooth_atom):
         theta = self.theta
         eta = self.X @ beta + self._glm_offset
         mu = np.exp(eta)
-        f = np.mean((theta + self.y) * np.log(theta + mu) - self.y * eta)
+        f = np.mean(self.obs_weights * ((theta + self.y) * np.log(theta + mu) - self.y * eta))
 
         if mode == "func":
             return f
 
         # gradient: (theta / n) * X^T [(mu - y) / (theta + mu)]
-        g = self.X.T @ (theta * (mu - self.y) / (theta + mu)) / self.X.shape[0]
+        g = self.X.T @ (self.obs_weights * theta * (mu - self.y) / (theta + mu)) / self.X.shape[0]
 
         if mode == "grad":
             return g
@@ -532,7 +538,7 @@ class negative_binomial_loss_smooth(smooth_atom):
             ``mu_i = exp(x_i^\\top beta + offset_i)``.
         """
         mu = np.exp(X @ beta + self._glm_offset)
-        w = self.theta * mu / (self.theta + mu)
+        w = self.obs_weights * self.theta * mu / (self.theta + mu)
         return (X * w[:, None]).T @ X / X.shape[0]
 
     def get_var_(self, X: np.ndarray, beta: np.ndarray, _y=None) -> np.ndarray:

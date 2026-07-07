@@ -7,7 +7,10 @@ from m_estimation_SI import GLM
 import pandas as pd
 from joblib import Parallel, delayed
 from m_estimation_SI.simulation import logistic_group_instance
-from m_estimation_SI.utils.cv import select_lambda_by_mse_for_lasso
+from m_estimation_SI.utils.cv import (
+    select_lambda_by_mse_for_lasso,
+    select_lambda_lassocv,
+)
 
 from selectinf.group_lasso_query import group_lasso
 
@@ -24,6 +27,7 @@ HEADER = [
     "p",
     "sparsity",
     "dispersion",
+    "gamma",
     "cluster_size",
     "method",
     "sum_covers",
@@ -126,7 +130,8 @@ def classic_si(
         glm_kwargs = {}
 
     if penalty < 0:
-        penalty = select_lambda_by_mse_for_lasso(family, X, Y, intercept, -1 * penalty)
+        # penalty = select_lambda_by_mse_for_lasso(family, X, Y, intercept, -1 * penalty)
+        penalty = select_lambda_lassocv(X, Y, intercept, base_penalty=-1 * penalty)
 
     sel = (
         GLM(family=family, l1_penalty=penalty, intercept=intercept, **glm_kwargs)
@@ -178,8 +183,11 @@ def sample_splitting_si(
     Y_train, Y_test = Y[train_indices], Y[test_indices]
 
     if penalty < 0:
-        penalty = select_lambda_by_mse_for_lasso(
-            family, X_train, Y_train, intercept, -1 * penalty
+        # penalty = select_lambda_by_mse_for_lasso(
+        #     family, X_train, Y_train, intercept, -1 * penalty
+        # )
+        penalty = select_lambda_lassocv(
+            X_train, Y_train, intercept, base_penalty=-1 * penalty
         )
 
     sel = (
@@ -268,6 +276,113 @@ def poisson_thinning_si(X, Y, mu, penalty, level, gamma, intercept):
     # constant shift so slope coefficients match beta_true on the selected set.
     beta_sel = GLM(family="poisson", intercept=intercept).fit(X_sel, mu).beta_
 
+    cover = (beta_sel >= conf_int[:, 0]) & (beta_sel <= conf_int[:, 1])
+    rejects = (0 < conf_int[:, 0]) | (0 > conf_int[:, 1])
+    return [
+        sum(cover),
+        sum(rejects),
+        sum(np.abs(beta_est - beta_sel)),
+        len(sel) + intercept,
+        sum(length),
+        ",".join(map(str, sel)),
+    ]
+
+
+def binomial_thinning_si(X, Y, mu, penalty, level, gamma, intercept):
+    """Selective inference via binomial data thinning for Bernoulli/logistic data.
+
+    Procedure:
+      (i)   Group observations by unique feature vector; group k has m_k members.
+      (ii)  Each observation in group k receives obs_weight = m_k / n.
+      (iii) Thin each group's binomial count S_k via the hypergeometric:
+              T_k | S_k ~ Hypergeometric(m_k, S_k, a_k),
+            giving T_k ~ Binomial(a_k, p_k) and (S_k-T_k) ~ Binomial(b_k, p_k)
+            independently.
+      (iv)  Average within each split: Y_train[i] = T_k / a_k,
+            Y_test[i] = (S_k - T_k) / b_k  (values in [0, 1]).
+      (v)   Fit weighted logistic regression on Y_train for selection, then on
+            Y_test for inference.
+
+    Observations with a unique feature vector (m_k=1) cannot be split; a warning
+    is issued and they are passed through unchanged into both halves with weight 1/n.
+    """
+    import warnings
+    from scipy.stats import hypergeom
+
+    n = X.shape[0]
+    epsilon = gamma / (1 + gamma)
+
+    X_bin, group_ids = np.unique(X, axis=0, return_inverse=True)
+    B = len(X_bin)
+
+    Y_train = np.empty(B)
+    Y_test = np.empty(B)
+    obs_weights = np.empty(B)
+    mu_bin = np.empty(B)
+
+    singleton_warned = False
+    for k in range(B):
+        bin_idx = np.where(group_ids == k)[0]
+        m_k = len(bin_idx)
+        obs_weights[k] = m_k * B / n
+        mu_bin[k] = mu[bin_idx[0]]
+
+        if m_k == 1:
+            if not singleton_warned:
+                warnings.warn(
+                    "Unique feature vectors found in binomial thinning; those "
+                    "observations are kept in both train and test sets unchanged.",
+                    stacklevel=2,
+                )
+                singleton_warned = True
+            Y_train[k] = Y[bin_idx[0]]
+            Y_test[k] = Y[bin_idx[0]]
+            continue
+
+        a_k = max(1, min(int(np.round(epsilon * m_k)), m_k - 1))
+        b_k = m_k - a_k
+
+        S_k = int(np.round(Y[bin_idx]).sum())
+        T_k = hypergeom.rvs(m_k, S_k, a_k)
+
+        Y_train[k] = T_k / a_k
+        Y_test[k] = (S_k - T_k) / b_k
+
+    penalty = (
+        penalty  # / np.sqrt(X_bin.shape[0]) # * np.sqrt(n) # / np.sqrt(X_bin.shape[0])
+    )
+    if penalty < 0:
+        penalty = select_lambda_lassocv(
+            X_bin, Y_train, intercept, base_penalty=-1 * penalty
+        )
+
+    sel = (
+        GLM(
+            family="logistic",
+            l1_penalty=penalty,
+            intercept=intercept,
+            obs_weights=obs_weights,
+        )
+        .fit(X_bin, Y_train)
+        .active()
+    )
+
+    if len(sel) == 0:
+        return [0, 0, 0, 0, 0, None]
+
+    X_sel = X_bin[:, sel]
+    model = GLM(family="logistic", intercept=intercept, obs_weights=obs_weights).fit(
+        X_sel, Y_test
+    )
+    beta_est = model.beta_
+    conf_int = model.conf_int(X_sel, level=level)
+    length = conf_int[:, 1] - conf_int[:, 0]
+
+    beta_sel = (
+        GLM(family="logistic", intercept=intercept, obs_weights=obs_weights)
+        .fit(X_sel, mu_bin)
+        .beta_
+    )
     cover = (beta_sel >= conf_int[:, 0]) & (beta_sel <= conf_int[:, 1])
     rejects = (0 < conf_int[:, 0]) | (0 > conf_int[:, 1])
     return [
@@ -484,10 +599,13 @@ def thin_outcomes_si(
         W *= np.sqrt(Y_var_noise)
 
     if penalty < 0:
-        penalty = select_lambda_by_mse_for_lasso(
-            family, X, Y + W * gamma, intercept, -1 * penalty
+        # penalty = select_lambda_by_mse_for_lasso(
+        #     family, X, Y + W * gamma, intercept, -1 * penalty
+        # )
+        penalty = select_lambda_lassocv(
+            X, Y + W * gamma, intercept, base_penalty=-1 * penalty
         )
-    
+
     # Thinning with different noise
     # n, p = X.shape
     # if Y_var is not None:
@@ -500,7 +618,7 @@ def thin_outcomes_si(
     #         .fit(X, Y)
     #         .predict(X)
     #     )
-    
+
     # from scipy.stats import bernoulli
 
     # W = bernoulli.rvs(mu_hat) - mu_hat
@@ -876,6 +994,7 @@ def run_simulation(
     error_model=None,
     misspecified=False,
     cluster_size=None,
+    discrete=False,
 ):
     if family in ("logistic", "linear", "poisson", "negative_binomial"):
         inst = logistic_group_instance
@@ -888,20 +1007,38 @@ def run_simulation(
     else:
         sparsity = int(sparsity)
 
-    X, _, beta_true = inst(
-        n=n,
-        p=p,
-        signal=signal,
-        sgroup=sparsity,
-        groups=np.arange(p),
-        ndiscrete=0,
-        nlevels=5,
-        equicorrelated=False,
-        scale=True,
-        center=False,
-        rho=rho,
-        random_signs=True,
-    )[:3]
+    if discrete:
+        n_unique = 50
+        X, _, beta_true = inst(
+            n=n,
+            p=p,
+            signal=signal,
+            sgroup=sparsity,
+            groups=np.arange(p),
+            ndiscrete=0,
+            nlevels=5,
+            equicorrelated=False,
+            scale=True,
+            center=False,
+            rho=rho,
+            random_signs=True,
+        )[:3]
+        X = np.repeat(X[:n_unique], n // n_unique, 0)
+    else:
+        X, _, beta_true = inst(
+            n=n,
+            p=p,
+            signal=signal,
+            sgroup=sparsity,
+            groups=np.arange(p),
+            ndiscrete=0,
+            nlevels=5,
+            equicorrelated=False,
+            scale=True,
+            center=False,
+            rho=rho,
+            random_signs=True,
+        )[:3]
 
     Y_var = None
     theta = None
@@ -1121,6 +1258,27 @@ def run_simulation(
             print(f"Error in negbinom_thinning: {e}")
             results["negbinom_thinning"] = [None] * 8
 
+    # ----- Binomial thinning (logistic + discrete flag only) -----
+    if family == "logistic" and discrete:
+        try:
+            results["binomial_thinning"] = binomial_thinning_si(
+                X.copy(),
+                Y,
+                mu,
+                np.sqrt(1 + gamma) * penalty,
+                level,
+                gamma,
+                intercept,
+            )
+            TPR, FDR = selection_accuracy(
+                ",".join(map(str, np.where(beta_true != 0)[0])),
+                results["binomial_thinning"][-1],
+            )
+            results["binomial_thinning"] += [TPR, FDR]
+        except Exception as e:
+            print(f"Error in binomial_thinning: {e}")
+            results["binomial_thinning"] = [None] * 8
+
     # ----- Thinning outcomes -----
     W = np.random.normal(0, 1, size=n)
     try:
@@ -1250,6 +1408,15 @@ def run_simulation(
 # %%
 def main(args):
     # encode hyperparameters into a filename
+
+    if args.epsilon:
+        # args.gamma = [np.round(eps / (1 - eps), 2) for eps in args.epsilon]
+        info_name = 'epsilon'
+        info_split = args.epsilon
+    else:
+        info_name = 'gamma'
+        info_split = args.gamma
+
     print(datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
     print(f"Arguements:, {args}")
     if args.cluster_size is not None:
@@ -1260,10 +1427,11 @@ def main(args):
         clusters = [None]
     tag = (
         f"p={','.join(map(str,args.p))}_level={args.level}_n={','.join(map(str,args.n))}"
-        f"_reps={args.n_reps}_gamma={args.gamma}_s={','.join(map(str,args.sparsity))}"
+        f"_reps={args.n_reps}_{info_name}={','.join(map(str,info_split))}_s={','.join(map(str,args.sparsity))}"
         f"_lam={args.lam}_fam={args.family}_errors={args.error_model}_mis={args.misspecified}_cluster_size={cluster_label}"
         f"_signal={args.signal}"
         f"_dispersion={','.join(map(str,args.dispersion))}_true_noise_var={args.true_noise_var}"
+        f"_discrete={args.discrete}"
     )
     script_name = os.path.splitext(os.path.basename(__file__))[0]
     outfile = os.path.join(OUT_PATH, f"{script_name}_{tag}.csv")
@@ -1271,18 +1439,21 @@ def main(args):
 
     first_write = True
     grid = list(
-        itertools.product(args.n, args.p, args.sparsity, args.dispersion, clusters)
-    )
-    for n, p, sparsity, dispersion, cluster_size in grid:
-        print(
-            f"Running: n={n}, p={p}, sparsity={sparsity}, dispersion={dispersion}, cluster_size={cluster_size}"
+        itertools.product(
+            args.n, args.p, args.sparsity, args.dispersion, info_split, clusters
         )
+    )
+    for n, p, sparsity, dispersion, info, cluster_size in grid:
+        print(
+            f"Running: n={n}, p={p}, sparsity={sparsity}, dispersion={dispersion}, {info_name}={info}, cluster_size={cluster_size}"
+        )
+
         results = Parallel(n_jobs=args.n_jobs, verbose=0)(
             delayed(run_simulation)(
                 n=n,
                 p=p,
                 family=args.family,
-                gamma=args.gamma,
+                gamma=info / (1 - info) if info_name == 'epsilon' else info,
                 sparsity=sparsity,
                 level=args.level,
                 signal=args.signal,
@@ -1293,6 +1464,7 @@ def main(args):
                 error_model=args.error_model,
                 misspecified=args.misspecified,
                 cluster_size=cluster_size,
+                discrete=args.discrete,
             )
             for _ in range(args.n_reps)
         )
@@ -1300,6 +1472,7 @@ def main(args):
             print(results)
             continue
 
+        HEADER[5] = info_name
         print(f"Writing to: {outfile}")
         for rep, res in enumerate(results):
             try:
@@ -1315,6 +1488,7 @@ def main(args):
                                         p,
                                         sparsity,
                                         dispersion,
+                                        info,
                                         cluster_size,
                                         method,
                                     ]
@@ -1338,7 +1512,14 @@ if __name__ == "__main__":
     parser.add_argument("--level", type=float, default=0.90)
     parser.add_argument("--n", type=int, nargs="+")
     parser.add_argument("--n_reps", type=int)
-    parser.add_argument("--gamma", type=float, default=1)
+    parser.add_argument("--gamma", type=float, default=[1], nargs="+")
+    parser.add_argument(
+        "--epsilon",
+        type=float,
+        default=None,
+        nargs="+",
+        help="Information fraction for inference",
+    )
     parser.add_argument("--sparsity", type=float, nargs="+")
     parser.add_argument("--signal", type=int, default=1)
     parser.add_argument("--lam", type=float)
@@ -1352,5 +1533,11 @@ if __name__ == "__main__":
     parser.add_argument("--true_noise_var", default=False, action="store_true")
     parser.add_argument("--cluster_size", type=int, default=None, nargs="+")
     parser.add_argument("--debug", default=False, action="store_true")
+    parser.add_argument(
+        "--discrete",
+        default=False,
+        action="store_true",
+        help="Enable binomial data thinning for logistic family (groups by unique feature vector, splits via hypergeometric).",
+    )
     args = parser.parse_args()
     main(args)

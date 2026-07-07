@@ -2,14 +2,13 @@
 python experiments/glm_confints.py \
   --p 40 \
   --level 0.90 \
-  --n 200 \
+  --n 100 \
   --n_reps 1 \
-  --gamma 1 \
+  --epsilon 0.3 0.7 \
   --sparsity 10 \
   --lam 0.02 \
   --verbose \
-  --debug \
-  --family logistic
+  --family linear
 
 python experiments/glm_confints.py \
   --p 40 \

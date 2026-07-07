@@ -1,5 +1,6 @@
 import numpy as np
 from m_estimation_SI import GLM
+from sklearn.linear_model import LassoCV
 
 def select_lambda_by_mse_for_lasso(
     family,
@@ -39,3 +40,15 @@ def select_lambda_by_mse_for_lasso(
             best_penalty = penalty
 
     return best_penalty
+
+
+def select_lambda_lassocv(X, Y, intercept=True, cv=10, base_penalty=None, num_candidates=100, **kwargs):
+    """Select a lasso penalty via sklearn's LassoCV.
+
+    sklearn's Lasso objective uses (1/(2n))||y - Xw||^2 + alpha*||w||_1,
+    while GLM's regreg-based loss omits the 1/2 factor, so the selected
+    alpha is doubled to match GLM's l1_penalty scaling.
+    """
+    alphas = np.geomspace(base_penalty * 0.01, base_penalty * 5, num_candidates)
+    lasso_cv = LassoCV(fit_intercept=intercept, cv=cv, alphas = alphas, **kwargs).fit(X, Y)
+    return 2 * lasso_cv.alpha_
