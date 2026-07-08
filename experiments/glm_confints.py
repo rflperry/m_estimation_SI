@@ -15,7 +15,9 @@ from m_estimation_SI.utils.cv import (
 from selectinf.group_lasso_query import group_lasso
 
 # from selectinf2.Tests.instance import gaussian_instance
+import regreg.api as rr
 from selectinf2.lasso import lasso
+from selectinf2.randomization import randomization as _randomization2
 from selectinf2.Utils.base import selected_targets as selected_targets2
 
 from selectinf.base import selected_targets
@@ -170,7 +172,7 @@ def sample_splitting_si(
     n = X.shape[0]
 
     if clusters is None:
-        train_indices = np.random.choice(n, int(n * 1 / (1 + gamma)), replace=False)
+        train_indices = np.random.choice(n, int(n * 1 / (1 + gamma**2)), replace=False)
     else:
         unique_clusters = np.unique(clusters)
         train_clusters = np.random.choice(
@@ -235,14 +237,15 @@ def poisson_thinning_si(X, Y, mu, penalty, level, gamma, intercept):
     Y_thin. Unlike sample splitting, all n observations contribute to both
     halves.
 
-    epsilon = gamma / (1 + gamma) mirrors the sample-splitting convention.
+    epsilon = gamma**2 / (1 + gamma**2) mirrors the thin_outcomes_si convention,
+    giving an information ratio inference:selection of gamma**2.
 
     Both halves are rescaled by their epsilon factors to restore mean mu,
     so no intercept offset adjustment is required and the intercept flag
     is respected as-is.
     """
     n, _ = X.shape
-    epsilon = gamma / (1 + gamma)
+    epsilon = gamma**2 / (1 + gamma**2)
 
     # Binomial thinning — requires integer counts
     Y_int = np.round(Y).astype(int)
@@ -310,7 +313,7 @@ def binomial_thinning_si(X, Y, mu, penalty, level, gamma, intercept):
     from scipy.stats import hypergeom
 
     n = X.shape[0]
-    epsilon = gamma / (1 + gamma)
+    epsilon = gamma**2 / (1 + gamma**2)
 
     X_bin, group_ids = np.unique(X, axis=0, return_inverse=True)
     B = len(X_bin)
@@ -483,7 +486,8 @@ def negbinom_thinning_si(
     so inference targets are identical to those of classic_si and no offset
     adjustment is needed.
 
-    epsilon = gamma / (1 + gamma) mirrors the sample-splitting convention.
+    epsilon = gamma**2 / (1 + gamma**2) mirrors the thin_outcomes_si convention,
+    giving an information ratio inference:selection of gamma**2.
     Both halves are rescaled by their epsilon factors to restore mean mu,
     so no intercept offset adjustment is required and the intercept flag
     is respected as-is.
@@ -509,7 +513,7 @@ def negbinom_thinning_si(
                 .theta_
             )
 
-    epsilon = gamma / (1 + gamma)
+    epsilon = gamma**2 / (1 + gamma**2)
     theta_thin = epsilon * theta
     theta_train = (1 - epsilon) * theta
 
@@ -918,24 +922,17 @@ def randomized_conditional_exact(
     perturb = gamma * X.T @ W  # they subtract the noise, loss is not scaled by 1/n
 
     if family == "linear":
-        conv = lasso.gaussian(
-            X,
-            Y,
-            penalty * n,
-            ridge_term=0.0,
-            # randomizer_scale=hess,
-        )
+        loglike = rr.glm.gaussian(X, Y)
     elif family == "logistic":
-        conv = lasso.logistic(
-            X,
-            Y,
-            penalty * n,
-            ridge_term=0.0,
-            # randomizer_scale=hess,
-        )
+        loglike = rr.glm.logistic(X, Y)
         dispersion = 1
     else:
         raise ValueError(f"Family {family} not supported")
+
+    # Build lasso directly so the randomizer covariance matches Cov(perturb) = hess.
+    # lasso.gaussian / lasso.logistic hardcode their own cov_rand (X.T@X or isotropic),
+    # which does not vary with gamma, causing CI widths to be insensitive to gamma.
+    conv = lasso(loglike, np.ones(X.shape[1]) * penalty * n, 0.0, _randomization2.gaussian(hess))
 
     signs = conv.fit(perturb=perturb, solve_args={"tol": 1.0e-8 * n, "min_its": 50})
     sel = np.where(signs != 0)[0]
@@ -1453,7 +1450,7 @@ def main(args):
                 n=n,
                 p=p,
                 family=args.family,
-                gamma=info / (1 - info) if info_name == 'epsilon' else info,
+                gamma=np.sqrt(info / (1 - info)) if info_name == 'epsilon' else info,
                 sparsity=sparsity,
                 level=args.level,
                 signal=args.signal,
