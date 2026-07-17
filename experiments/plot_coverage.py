@@ -70,7 +70,7 @@ def main(
         "poisson_thinning": "Poisson Thinning",
         "negbinom_thinning": "NB Thinning",
         "logistic_fission": "Neufeld et al. [2025]",
-        "binomial_thinning": "Bin Thinning"
+        "binomial_thinning": "Binomial Thinning"
     }
     coverage_df["Method"] = coverage_df["Method"].replace(method_names)
 
@@ -84,7 +84,7 @@ def main(
         "Poisson Thinning": "#17becf",
         "NB Thinning": "#bcbd22",
         "Neufeld et al. [2025]": "#a65628",
-        "Bin Thinning": "#a65628",
+        "Binomial Thinning": "#a65628",
     }
 
     # coverage_df = coverage_df.dropna()
