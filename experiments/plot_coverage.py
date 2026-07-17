@@ -89,6 +89,7 @@ def main(
 
     # coverage_df = coverage_df.dropna()
     coverage_df = coverage_df[coverage_df["Method"] != "Thin (grad)"]
+    coverage_df = coverage_df[coverage_df["Method"] != "Neufeld et al. [2025]"]
 
     fig, axes = plt.subplots(1, 3, figsize=(7, 2), width_ratios=[1, 1.5, 1])
     plt.rcParams.update(
