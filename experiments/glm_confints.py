@@ -342,7 +342,7 @@ def binomial_thinning_si(X, Y, mu, penalty, level, gamma, intercept):
             Y_test[k] = Y[bin_idx[0]]
             continue
 
-        a_k = max(1, min(int(np.round(epsilon * m_k)), m_k - 1))
+        a_k = max(1, min(int(np.round((1 - epsilon) * m_k)), m_k - 1))
         b_k = m_k - a_k
 
         S_k = int(np.round(Y[bin_idx]).sum())
@@ -351,9 +351,7 @@ def binomial_thinning_si(X, Y, mu, penalty, level, gamma, intercept):
         Y_train[k] = T_k / a_k
         Y_test[k] = (S_k - T_k) / b_k
 
-    penalty = (
-        penalty  # / np.sqrt(X_bin.shape[0]) # * np.sqrt(n) # / np.sqrt(X_bin.shape[0])
-    )
+    penalty = penalty / np.sqrt(B)
     if penalty < 0:
         penalty = select_lambda_lassocv(
             X_bin, Y_train, intercept, base_penalty=-1 * penalty
@@ -1169,7 +1167,7 @@ def run_simulation(
             X.copy(),
             Y,
             mu,
-            np.sqrt(1 + gamma) * penalty,
+            np.sqrt(1 + gamma**2) * penalty,
             level,
             gamma,
             intercept,
@@ -1195,7 +1193,7 @@ def run_simulation(
     #             X.copy(),
     #             Y,
     #             mu,
-    #             np.sqrt(1 + gamma) * penalty,
+    #             np.sqrt(1 + gamma**2) * penalty,
     #             level,
     #             gamma,
     #             intercept,
@@ -1217,7 +1215,7 @@ def run_simulation(
                 X.copy(),
                 Y,
                 mu,
-                np.sqrt(1 + gamma) * penalty,
+                np.sqrt(1 + gamma**2) * penalty,
                 level,
                 gamma,
                 intercept,
@@ -1239,7 +1237,7 @@ def run_simulation(
                 X.copy(),
                 Y,
                 mu,
-                np.sqrt(1 + gamma) * penalty,
+                np.sqrt(1 + gamma**2) * penalty,
                 level,
                 gamma,
                 intercept,
@@ -1262,7 +1260,7 @@ def run_simulation(
                 X.copy(),
                 Y,
                 mu,
-                np.sqrt(1 + gamma) * penalty,
+                np.sqrt(1 + gamma**2) * penalty,
                 level,
                 gamma,
                 intercept,
@@ -1279,13 +1277,13 @@ def run_simulation(
     # ----- Thinning outcomes -----
     W = np.random.normal(0, 1, size=n)
     try:
-        results["thin_outcomes"], penalty = thin_outcomes_si(
+        results["thin_outcomes"], penalty_learned = thin_outcomes_si(
             family,
             X.copy(),
             Y,
             mu,
             Y_var,
-            np.sqrt(1 + gamma) * penalty,
+            np.sqrt(1 + gamma**2) * penalty,
             level,
             gamma,
             W.copy(),
@@ -1314,7 +1312,7 @@ def run_simulation(
     #         Y,
     #         mu,
     #         Y_var,
-    #         np.sqrt(1 + gamma) * penalty,
+    #         np.sqrt(1 + gamma**2) * penalty,
     #         level,
     #         gamma,
     #         W.copy(),
@@ -1346,7 +1344,7 @@ def run_simulation(
             Y,
             mu,
             Y_var,
-            penalty,  # np.sqrt(1 + gamma) * penalty,
+            penalty_learned,  # output of score thinning, if CV
             level,
             gamma,
             W.copy(),
@@ -1378,7 +1376,7 @@ def run_simulation(
             Y,
             mu,
             Y_var,
-            penalty,  # np.sqrt(1 + gamma) * penalty,
+            penalty_learned,  # output of score thinning, if CV
             level,
             gamma,
             W.copy(),
