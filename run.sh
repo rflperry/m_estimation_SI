@@ -68,7 +68,7 @@ python experiments/plot_coverage.py \
 
 
 ###################################################
-# Poisson model, varying dispersion
+# Poisson model, varying n
 ###################################################
 
 python experiments/glm_confints.py \
@@ -87,6 +87,10 @@ python experiments/plot_coverage.py \
   --fname results/glm_confints_p=40_level=0.9_n=100,200,500,1000_reps=1000_gamma=1.0_s=10.0_lam=0.02_fam=poisson_errors=None_mis=None_cluster_size=None_signal=1_dispersion=1_true_noise_var=False_discrete=False.csv \
   --out figures/poisson.png \
   --logx
+
+###################################################
+# Poisson model, varying dispersion
+###################################################
 
 python experiments/glm_confints.py \
   --p 40 \
@@ -130,5 +134,5 @@ python experiments/glm_confints.py \
 
 python experiments/plot_coverage.py \
   --fname results/glm_confints_p=40_level=0.9_n=100,200,500,1000_reps=1000_gamma=1.0_s=10.0_lam=0.02_fam=logistic_errors=None_mis=None_cluster_size=None_signal=1_dispersion=1_true_noise_var=False_discrete=True.csv \
-  --out figures/logistic_discrete_temp.png \
+  --out figures/logistic_discrete.png \
   --logx
