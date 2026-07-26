@@ -17,6 +17,7 @@ __pycache__/
 # project_misc
 logs/
 R/
+bak/
 
 # Distribution / packaging
 .Python

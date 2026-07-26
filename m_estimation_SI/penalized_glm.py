@@ -3,8 +3,13 @@
 import numpy as np
 import regreg.api as rr
 from scipy.stats import norm
-from scipy.special import expit
-from .losses import logistic_loss_smooth, least_squares_loss_smooth
+from scipy.special import expit, digamma, polygamma
+from .losses import (
+    logistic_loss_smooth,
+    least_squares_loss_smooth,
+    poisson_loss_smooth,
+    negative_binomial_loss_smooth,
+)
 
 
 class GLM:
@@ -21,9 +26,12 @@ class GLM:
 
     Parameters
     ----------
-    family : {'linear', 'logistic'}
+    family : {'linear', 'logistic', 'poisson', 'negative_binomial'}
         Response distribution.  ``'linear'`` uses least-squares loss;
-        ``'logistic'`` uses binary cross-entropy loss.
+        ``'logistic'`` uses binary cross-entropy loss;
+        ``'poisson'`` uses Poisson log-likelihood with log link;
+        ``'negative_binomial'`` uses NB log-likelihood with log link
+        and fixed dispersion ``theta``.
     l1_penalty : float or None, default None
         L1 (lasso) penalty weight ``lambda >= 0``.  ``None`` or ``0``
         fits an unpenalized model.
@@ -43,6 +51,22 @@ class GLM:
         Per-feature L1 penalty weights.  Length must equal the number of
         columns in *X* (excluding any intercept).  ``None`` gives uniform
         weight 1 to all features.
+    obs_weights : array-like of shape (n_samples,) or None, default None
+        Per-observation loss weights.  Each observation's contribution to
+        the objective, gradient, and Hessian is multiplied by its weight.
+        ``None`` gives uniform weight 1 to all observations.
+    theta : float or None, default None
+        Dispersion (size) parameter for ``family='negative_binomial'``.
+        Must be positive.  When ``None``, theta is estimated jointly with
+        the regression coefficients via a two-step IRLS procedure
+        (alternating between optimising β with θ fixed and maximising the
+        profile log-likelihood for θ with β fixed).
+        Ignored for other families.
+    offset : ndarray of shape (n_samples,) or None, default None
+        Fixed term added to the linear predictor before the link function,
+        with its coefficient constrained to 1.  ``None`` means no offset.
+        Useful for incorporating known exposure terms (e.g. ``log(t_i)``
+        for Poisson rate models) or for logistic fission.
 
     Attributes
     ----------
@@ -53,6 +77,18 @@ class GLM:
         Response residuals ``y - predict(X)`` on the training data.
     loss_ : smooth_atom
         The regreg loss object (set after :meth:`fit`).
+    theta_ : float or None
+        Fitted dispersion for ``family='negative_binomial'`` (set after
+        :meth:`fit`).  Equals the user-supplied ``theta`` when provided,
+        or the IRLS estimate when ``theta=None``.  ``None`` for all other
+        families.
+    phi_ : float
+        Pearson overdispersion estimate (set after :meth:`fit`).
+        Computed as ``(1 / dof) * sum((y - mu)^2 / V(mu))`` where
+        ``V(mu)`` is the GLM variance function and ``dof = n - p``
+        (number of non-zero coefficients).  A value near 1 indicates a
+        well-calibrated model; values appreciably above 1 indicate
+        overdispersion relative to the fitted family.
 
     Examples
     --------
@@ -103,6 +139,9 @@ class GLM:
         min_its: int = 50,
         tol: float = 1e-8,
         weights=None,
+        theta=None,
+        offset=None,
+        obs_weights=None,
     ):
         self.family = family
         self.l1_penalty = l1_penalty
@@ -111,10 +150,15 @@ class GLM:
         self.tol = tol
         self.intercept = intercept
         self.weights = weights
+        self.theta = theta
+        self.offset = offset
+        self.obs_weights = obs_weights
 
         self.beta_ = None
         self.loss_ = None
         self.residuals_ = None
+        self.theta_ = None
+        self.phi_ = None
 
     def fit(self, X: np.ndarray, y: np.ndarray) -> "GLM":
         """Fit the model.
@@ -126,7 +170,8 @@ class GLM:
             one is added automatically when ``intercept=True``.
         y : ndarray of shape (n_samples,)
             Response vector.  Binary ``{0, 1}`` for ``family='logistic'``;
-            continuous for ``family='linear'``.
+            continuous for ``family='linear'``; non-negative integers for
+            ``family='poisson'``.
 
         Returns
         -------
@@ -135,20 +180,40 @@ class GLM:
         """
         n = X.shape[0]
         X_fit = np.hstack([np.ones((n, 1)), X]) if self.intercept else X
-        self._solve_problem(X_fit, y)
-        self.residuals_ = y - self.predict(X)
+        if self.family == "negative_binomial" and self.theta is None:
+            self._fit_nb_irls(X_fit, y)
+        else:
+            self._solve_problem(X_fit, y)
+        self.theta_ = self.theta if self.family == "negative_binomial" else None
+        fitted = self.loss_._fitted_values(self.beta_)
+        self.residuals_ = y - fitted
+        # Pearson overdispersion: (1/dof) * sum((y - mu)^2 / V(mu))
+        mu_fit = fitted
+        V_fit = self.loss_.get_model_var_(X_fit, self.beta_)
+        dof = max(X_fit.shape[0] - int(np.sum(self.beta_ != 0)), 1)
+        self.phi_ = float(np.sum((y - mu_fit) ** 2 / np.maximum(V_fit, 1e-10)) / dof)
         return self
 
     def _solve_problem(self, X: np.ndarray, y: np.ndarray):
         """Build and solve the regreg problem on the (possibly augmented) design."""
+        offset = (
+            np.asarray(self.offset, dtype=float) if self.offset is not None else None
+        )
+        obs_weights = (
+            np.asarray(self.obs_weights, dtype=float) if self.obs_weights is not None else None
+        )
         if self.family == "logistic":
-            self.loss_ = logistic_loss_smooth(X, y)
+            self.loss_ = logistic_loss_smooth(X, y, offset=offset, obs_weights=obs_weights)
         elif self.family == "linear":
-            self.loss_ = least_squares_loss_smooth(X, y)
+            self.loss_ = least_squares_loss_smooth(X, y, offset=offset, obs_weights=obs_weights)
+        elif self.family == "poisson":
+            self.loss_ = poisson_loss_smooth(X, y, offset=offset, obs_weights=obs_weights)
+        elif self.family == "negative_binomial":
+            self.loss_ = negative_binomial_loss_smooth(X, y, self.theta, offset=offset, obs_weights=obs_weights)
         else:
             raise ValueError(
                 f"family='{self.family}' is not supported. "
-                "Choose 'linear' or 'logistic'."
+                "Choose 'linear', 'logistic', 'poisson', or 'negative_binomial'."
             )
 
         if self.weights is None:
@@ -170,6 +235,93 @@ class GLM:
         self.beta_ = problem.solve(quad, min_its=self.min_its, tol=self.tol)
 
     # ------------------------------------------------------------------
+    # NB theta estimation (IRLS)
+    # ------------------------------------------------------------------
+
+    def _estimate_nb_theta(
+        self,
+        y: np.ndarray,
+        mu: np.ndarray,
+        theta_init: float,
+        max_iter: int = 25,
+        tol: float = 1e-8,
+    ) -> float:
+        """Profile MLE for the NB dispersion theta given fixed means mu.
+
+        Solves the score equation
+
+        .. math::
+
+            \\sum_i \\left[ \\psi(y_i + \\theta) - \\psi(\\theta)
+                + \\log\\frac{\\theta}{\\theta + \\mu_i}
+                + \\frac{\\mu_i - y_i}{\\theta + \\mu_i} \\right] = 0
+
+        via Newton-Raphson on the log scale (guarantees theta > 0).
+        """
+        theta = float(theta_init)
+        for _ in range(max_iter):
+            # Score dL/dtheta
+            score = float(np.sum(
+                digamma(y + theta) - digamma(theta)
+                + np.log(theta / (theta + mu))
+                + (mu - y) / (theta + mu)
+            ))
+            # d²L/dtheta²
+            d2 = float(np.sum(
+                polygamma(1, y + theta) - polygamma(1, theta)
+                + 1.0 / theta - 1.0 / (theta + mu)
+                + (y - mu) / (theta + mu) ** 2
+            ))
+            if d2 >= 0:
+                # Hessian non-negative → not at a proper maximum; stop
+                break
+            # Newton step on log(theta) for guaranteed positivity
+            theta_new = float(np.clip(
+                theta * np.exp(-score / (theta * d2)), 1e-6, 1e6
+            ))
+            if abs(np.log(theta_new) - np.log(theta)) < tol:
+                theta = theta_new
+                break
+            theta = theta_new
+        return theta
+
+    def _fit_nb_irls(
+        self,
+        X_fit: np.ndarray,
+        y: np.ndarray,
+        max_iter: int = 25,
+        irls_tol: float = 1e-6,
+    ):
+        """Alternating IRLS for NB: optimise beta with theta fixed, then update
+        theta by profile MLE.  Writes the converged theta into ``self.theta``
+        so that ``_solve_problem`` (and downstream ``se``/``get_var`` calls)
+        use the correct value.
+        """
+        # Initialise theta from marginal method of moments
+        mean_y = float(np.clip(np.mean(y), 1e-6, None))
+        var_y = float(np.var(y))
+        excess = var_y - mean_y
+        theta = float(np.clip(
+            mean_y ** 2 / excess if excess > 0 else 1e6,
+            0.01, 1e6,
+        ))
+
+        for _ in range(max_iter):
+            old_theta = theta
+            # Step 1: fit beta with current theta
+            self.theta = theta
+            self._solve_problem(X_fit, y)
+            mu = self.loss_._fitted_values(self.beta_)
+            # Step 2: profile MLE for theta given current mu
+            theta = self._estimate_nb_theta(y, mu, theta_init=theta)
+            if abs(np.log(theta) - np.log(old_theta)) < irls_tol:
+                break
+
+        # Final solve with the converged theta to keep loss_ consistent
+        self.theta = theta
+        self._solve_problem(X_fit, y)
+
+    # ------------------------------------------------------------------
     # Prediction
     # ------------------------------------------------------------------
 
@@ -184,7 +336,8 @@ class GLM:
         Returns
         -------
         ndarray of shape (n_samples,)
-            Predicted probabilities (logistic) or fitted values (linear).
+            Predicted probabilities (logistic), fitted means (poisson),
+            or fitted values (linear).
         """
         assert self.loss_ is not None, "Call fit() before predict()."
         X_pred = np.hstack([np.ones((X.shape[0], 1)), X]) if self.intercept else X
@@ -228,6 +381,7 @@ class GLM:
         Y: np.ndarray,
         error_model=None,
         clusters=None,
+        overdispersed: bool = False,
     ):
         """Estimate outcome variances under a working error model.
 
@@ -249,6 +403,12 @@ class GLM:
         clusters : ndarray of shape (n_samples,) or None
             Integer cluster labels.  Required when
             ``error_model='clustered'``.
+        overdispersed : bool, default False
+            If ``True``, scale the model-based variance by the fitted
+            Pearson overdispersion ``phi_``, i.e. return
+            ``phi_ * V(mu_i)`` per observation.  This replaces the
+            raw ``get_var_`` estimate and is applied before any
+            ``error_model`` pooling.
 
         Returns
         -------
@@ -266,7 +426,10 @@ class GLM:
         X_fit = np.hstack([np.ones((X.shape[0], 1)), X]) if self.intercept else X
         n, p = X_fit.shape
 
-        var_est = self.loss_.get_var_(X_fit, self.beta_, Y)
+        if overdispersed:
+            var_est = self.phi_ * self.loss_.get_model_var_(X_fit, self.beta_)
+        else:
+            var_est = self.loss_.get_var_(X_fit, self.beta_, Y)
 
         if error_model == "homogeneous":
             pdim = np.sum(self.beta_ != 0)
@@ -301,6 +464,7 @@ class GLM:
     def se(
         self,
         X: np.ndarray,
+        cov=False,
         clusters=None,
         correction=None,
     ) -> np.ndarray:
@@ -323,6 +487,8 @@ class GLM:
         ----------
         X : ndarray of shape (n_samples, n_features)
             Design matrix used for fitting (without intercept column).
+        cov : bool, default False
+            If true, returns the full covariance matrix instead.
         clusters : ndarray of shape (n_samples,) or None
             Integer cluster labels.  If provided, CR1 cluster-robust
             standard errors are computed; otherwise HC1 is used.
@@ -349,9 +515,13 @@ class GLM:
         n, p = X_fit.shape
         H_inv = np.linalg.inv(self.loss_.get_hessian(X_fit, self.beta_))
 
+        # Weighted score contributions: w_i * r_i drives the meat
+        obs_weights = self.loss_.obs_weights  # shape (n,)
+        wr = obs_weights * self.residuals_
+
         if clusters is None:
             # HC1 heteroskedasticity-robust meat
-            Sigma = X_fit.T @ np.diag(self.residuals_**2) @ X_fit * (n - 1) / (n - p) / n
+            Sigma = X_fit.T @ np.diag(wr**2) @ X_fit * (n - 1) / (n - p) / n
         else:
             # CR1 cluster-robust meat
             unique_clusters = np.unique(clusters)
@@ -359,13 +529,15 @@ class GLM:
             Sigma = np.zeros((p, p))
             for g in unique_clusters:
                 idx = np.where(clusters == g)[0]
-                Xg, Rg = X_fit[idx], self.residuals_[idx]
+                Xg, Rg = X_fit[idx], wr[idx]
                 Sigma += Xg.T @ np.outer(Rg, Rg) @ Xg
             Sigma *= (G / (G - 1)) * ((n - 1) / (n - p)) / n
 
         if correction is not None:
             Sigma = Sigma + correction
 
+        if cov:
+            return H_inv @ Sigma @ H_inv
         return np.sqrt(np.diag(H_inv @ Sigma @ H_inv))
 
     # ------------------------------------------------------------------

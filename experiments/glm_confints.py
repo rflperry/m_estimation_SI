@@ -7,11 +7,17 @@ from m_estimation_SI import GLM
 import pandas as pd
 from joblib import Parallel, delayed
 from m_estimation_SI.simulation import logistic_group_instance
+from m_estimation_SI.utils.cv import (
+    select_lambda_by_mse_for_lasso,
+    select_lambda_lassocv,
+)
 
 from selectinf.group_lasso_query import group_lasso
 
 # from selectinf2.Tests.instance import gaussian_instance
+import regreg.api as rr
 from selectinf2.lasso import lasso
+from selectinf2.randomization import randomization as _randomization2
 from selectinf2.Utils.base import selected_targets as selected_targets2
 
 from selectinf.base import selected_targets
@@ -23,6 +29,7 @@ HEADER = [
     "p",
     "sparsity",
     "dispersion",
+    "gamma",
     "cluster_size",
     "method",
     "sum_covers",
@@ -118,18 +125,33 @@ def block_sqrt_mult(W, Y_var, Z=None):
         return W_new
 
 
-def classic_si(family, X, Y, mu, penalty, level, intercept, clusters=None):
-    sel = GLM(family=family, l1_penalty=penalty, intercept=intercept).fit(X, Y).active()
+def classic_si(
+    family, X, Y, mu, penalty, level, intercept, clusters=None, glm_kwargs=None
+):
+    if glm_kwargs is None:
+        glm_kwargs = {}
+
+    if penalty < 0:
+        # penalty = select_lambda_by_mse_for_lasso(family, X, Y, intercept, -1 * penalty)
+        penalty = select_lambda_lassocv(X, Y, intercept, base_penalty=-1 * penalty)
+
+    sel = (
+        GLM(family=family, l1_penalty=penalty, intercept=intercept, **glm_kwargs)
+        .fit(X, Y)
+        .active()
+    )
 
     if len(sel) == 0:
         return [0, 0, 0, 0, 0, None]
     else:
         X_sel = X[:, sel]
-        model = GLM(family=family, intercept=intercept).fit(X_sel, Y)
+        model = GLM(family=family, intercept=intercept, **glm_kwargs).fit(X_sel, Y)
         beta_est = model.beta_
         conf_int = model.conf_int(X_sel, level=level, clusters=clusters)
         length = conf_int[:, 1] - conf_int[:, 0]
-        beta_sel = GLM(family=family, intercept=intercept).fit(X_sel, mu).beta_
+        beta_sel = (
+            GLM(family=family, intercept=intercept, **glm_kwargs).fit(X_sel, mu).beta_
+        )
         cover = (beta_sel >= conf_int[:, 0]) & (beta_sel <= conf_int[:, 1])
         rejects = (0 < conf_int[:, 0]) | (0 > conf_int[:, 1])
         return [
@@ -143,12 +165,14 @@ def classic_si(family, X, Y, mu, penalty, level, intercept, clusters=None):
 
 
 def sample_splitting_si(
-    family, X, Y, mu, Y_var, penalty, level, gamma, intercept, clusters=None
+    family, X, Y, mu, penalty, level, gamma, intercept, clusters=None, glm_kwargs=None
 ):
+    if glm_kwargs is None:
+        glm_kwargs = {}
     n = X.shape[0]
 
     if clusters is None:
-        train_indices = np.random.choice(n, int(n * 1 / (1 + gamma)), replace=False)
+        train_indices = np.random.choice(n, int(n * 1 / (1 + gamma**2)), replace=False)
     else:
         unique_clusters = np.unique(clusters)
         train_clusters = np.random.choice(
@@ -159,8 +183,17 @@ def sample_splitting_si(
     test_indices = np.setdiff1d(np.arange(n), train_indices)
     X_train, X_test = X[train_indices], X[test_indices]
     Y_train, Y_test = Y[train_indices], Y[test_indices]
+
+    if penalty < 0:
+        # penalty = select_lambda_by_mse_for_lasso(
+        #     family, X_train, Y_train, intercept, -1 * penalty
+        # )
+        penalty = select_lambda_lassocv(
+            X_train, Y_train, intercept, base_penalty=-1 * penalty
+        )
+
     sel = (
-        GLM(family=family, l1_penalty=penalty, intercept=intercept)
+        GLM(family=family, l1_penalty=penalty, intercept=intercept, **glm_kwargs)
         .fit(X_train, Y_train)
         .active()
     )
@@ -169,12 +202,14 @@ def sample_splitting_si(
         return [0, 0, 0, 0, 0, None]
     else:
         X_sel = X_test[:, sel]
-        model = GLM(family=family, intercept=intercept).fit(X_sel, Y_test)
+        model = GLM(family=family, intercept=intercept, **glm_kwargs).fit(X_sel, Y_test)
         beta_est = model.beta_
         conf_int = model.conf_int(X_sel, level=level)
         length = conf_int[:, 1] - conf_int[:, 0]
         beta_sel = (
-            GLM(family=family, intercept=intercept).fit(X_sel, mu[test_indices]).beta_
+            GLM(family=family, intercept=intercept, **glm_kwargs)
+            .fit(X_sel, mu[test_indices])
+            .beta_
         )
         cover = (beta_sel >= conf_int[:, 0]) & (beta_sel <= conf_int[:, 1])
         rejects = (0 < conf_int[:, 0]) | (0 > conf_int[:, 1])
@@ -186,6 +221,340 @@ def sample_splitting_si(
             sum(length),
             ",".join(map(str, sel)),
         ]
+
+
+def poisson_thinning_si(X, Y, mu, penalty, level, gamma, intercept):
+    """Selective inference via Poisson data thinning (Neufeld & Dharamshi).
+
+    Uses the Binomial splitting property of the Poisson distribution: if
+    Y_i ~ Poisson(mu_i) then for epsilon in (0, 1),
+
+      Y_thin[i] | Y[i]  ~  Binomial(Y[i], epsilon)
+      Y_train[i]         =  Y[i] - Y_thin[i]
+
+    are independent, with Y_train ~ Poisson((1-epsilon)*mu) and
+    Y_thin ~ Poisson(epsilon*mu). Selection uses Y_train; inference uses
+    Y_thin. Unlike sample splitting, all n observations contribute to both
+    halves.
+
+    epsilon = gamma**2 / (1 + gamma**2) mirrors the thin_outcomes_si convention,
+    giving an information ratio inference:selection of gamma**2.
+
+    Both halves are rescaled by their epsilon factors to restore mean mu,
+    so no intercept offset adjustment is required and the intercept flag
+    is respected as-is.
+    """
+    n, _ = X.shape
+    epsilon = gamma**2 / (1 + gamma**2)
+
+    # Binomial thinning — requires integer counts
+    Y_int = np.round(Y).astype(int)
+    Y_test = np.random.binomial(Y_int, epsilon).astype(float)
+
+    # Rescale each half to have mean mu (quasi-likelihood fit remains consistent)
+    Y_train = (Y - Y_test) / (1 - epsilon)
+    Y_test /= epsilon
+
+    if penalty < 0:
+        penalty = select_lambda_by_mse_for_lasso(
+            "poisson", X, Y_train, True, -1 * penalty
+        )
+
+    sel = (
+        GLM(family="poisson", l1_penalty=penalty, intercept=intercept)
+        .fit(X, Y_train)
+        .active()
+    )
+
+    if len(sel) == 0:
+        return [0, 0, 0, 0, 0, None]
+
+    X_sel = X[:, sel]
+    model = GLM(family="poisson", intercept=intercept).fit(X_sel, Y_test)
+    beta_est = model.beta_
+    conf_int = model.conf_int(X_sel, level=level)
+    length = conf_int[:, 1] - conf_int[:, 0]
+
+    # Reference: unpenalized Poisson GLM on true means; intercept absorbs any
+    # constant shift so slope coefficients match beta_true on the selected set.
+    beta_sel = GLM(family="poisson", intercept=intercept).fit(X_sel, mu).beta_
+
+    cover = (beta_sel >= conf_int[:, 0]) & (beta_sel <= conf_int[:, 1])
+    rejects = (0 < conf_int[:, 0]) | (0 > conf_int[:, 1])
+    return [
+        sum(cover),
+        sum(rejects),
+        sum(np.abs(beta_est - beta_sel)),
+        len(sel) + intercept,
+        sum(length),
+        ",".join(map(str, sel)),
+    ]
+
+
+def binomial_thinning_si(X, Y, mu, penalty, level, gamma, intercept):
+    """Selective inference via binomial data thinning for Bernoulli/logistic data.
+
+    Procedure:
+      (i)   Group observations by unique feature vector; group k has m_k members.
+      (ii)  Each observation in group k receives obs_weight = m_k / n.
+      (iii) Thin each group's binomial count S_k via the hypergeometric:
+              T_k | S_k ~ Hypergeometric(m_k, S_k, a_k),
+            giving T_k ~ Binomial(a_k, p_k) and (S_k-T_k) ~ Binomial(b_k, p_k)
+            independently.
+      (iv)  Average within each split: Y_train[i] = T_k / a_k,
+            Y_test[i] = (S_k - T_k) / b_k  (values in [0, 1]).
+      (v)   Fit weighted logistic regression on Y_train for selection, then on
+            Y_test for inference.
+
+    Observations with a unique feature vector (m_k=1) cannot be split; a warning
+    is issued and they are passed through unchanged into both halves with weight 1/n.
+    """
+    import warnings
+    from scipy.stats import hypergeom
+
+    n = X.shape[0]
+    epsilon = gamma**2 / (1 + gamma**2)
+
+    X_bin, group_ids = np.unique(X, axis=0, return_inverse=True)
+    B = len(X_bin)
+
+    Y_train = np.empty(B)
+    Y_test = np.empty(B)
+    obs_weights = np.empty(B)
+    mu_bin = np.empty(B)
+
+    singleton_warned = False
+    for k in range(B):
+        bin_idx = np.where(group_ids == k)[0]
+        m_k = len(bin_idx)
+        obs_weights[k] = m_k * B / n
+        mu_bin[k] = mu[bin_idx[0]]
+
+        if m_k == 1:
+            if not singleton_warned:
+                warnings.warn(
+                    "Unique feature vectors found in binomial thinning; those "
+                    "observations are kept in both train and test sets unchanged.",
+                    stacklevel=2,
+                )
+                singleton_warned = True
+            Y_train[k] = Y[bin_idx[0]]
+            Y_test[k] = Y[bin_idx[0]]
+            continue
+
+        a_k = max(1, min(int(np.round((1 - epsilon) * m_k)), m_k - 1))
+        b_k = m_k - a_k
+
+        S_k = int(np.round(Y[bin_idx]).sum())
+        T_k = hypergeom.rvs(m_k, S_k, a_k)
+
+        Y_train[k] = T_k / a_k
+        Y_test[k] = (S_k - T_k) / b_k
+
+    penalty = penalty / np.sqrt(B)
+    if penalty < 0:
+        penalty = select_lambda_lassocv(
+            X_bin, Y_train, intercept, base_penalty=-1 * penalty
+        )
+
+    sel = (
+        GLM(
+            family="logistic",
+            l1_penalty=penalty,
+            intercept=intercept,
+            obs_weights=obs_weights,
+        )
+        .fit(X_bin, Y_train)
+        .active()
+    )
+
+    if len(sel) == 0:
+        return [0, 0, 0, 0, 0, None]
+
+    X_sel = X_bin[:, sel]
+    model = GLM(family="logistic", intercept=intercept, obs_weights=obs_weights).fit(
+        X_sel, Y_test
+    )
+    beta_est = model.beta_
+    conf_int = model.conf_int(X_sel, level=level)
+    length = conf_int[:, 1] - conf_int[:, 0]
+
+    beta_sel = (
+        GLM(family="logistic", intercept=intercept, obs_weights=obs_weights)
+        .fit(X_sel, mu_bin)
+        .beta_
+    )
+    cover = (beta_sel >= conf_int[:, 0]) & (beta_sel <= conf_int[:, 1])
+    rejects = (0 < conf_int[:, 0]) | (0 > conf_int[:, 1])
+    return [
+        sum(cover),
+        sum(rejects),
+        sum(np.abs(beta_est - beta_sel)),
+        len(sel) + intercept,
+        sum(length),
+        ",".join(map(str, sel)),
+    ]
+
+
+def logistic_fission_si(X, Y, mu, penalty, level, gamma, intercept, true_mu=False):
+    """Selective inference via Logistic Fission (Discussion, Neufeld 2025).
+    Epsilon = gamma / (1 + gamma) mirrors the sample-splitting convention.
+    """
+    n, p = X.shape
+
+    if true_mu:
+        mu_hat = mu
+    elif n > p + 1:
+        mu_hat = GLM(family="logistic", intercept=True).fit(X, Y).predict(X)
+    else:  # p > n
+        mu_hat = (
+            GLM(family="logistic", intercept=True, l1_penalty=penalty)
+            .fit(X, Y)
+            .predict(X)
+        )
+
+    # epsilon = gamma / (1 + gamma)
+    epsilon = 0.5 + np.sqrt(
+        np.maximum(0, 1 - 4 * mu_hat * (1 - mu_hat) * (1 + gamma))
+    ) / np.abs(2 * (1 - 2 * mu_hat))
+    epsilon[epsilon >= 1] = 0.95
+
+    # epsilon = 1 - 0.2 * np.sqrt(100 / n)
+    epsilon = 0.8
+
+    from scipy.stats import bernoulli
+
+    Y = np.round(Y).astype(int)
+    Z = bernoulli.rvs(epsilon)
+    Y_train = (1 - Z) * Y + Z * (1 - Y)
+    Y_test = Y
+
+    if penalty < 0:
+        penalty = select_lambda_by_mse_for_lasso(
+            "logistic", X, Y_train, True, -1 * penalty
+        )
+
+    sel = (
+        GLM(family="logistic", l1_penalty=penalty, intercept=intercept)
+        .fit(X, Y_train)
+        .active()
+    )
+
+    if len(sel) == 0:
+        return [0, 0, 0, 0, 0, None]
+
+    X_sel = X[:, sel]
+    log_ratio = np.log(epsilon / (1 - epsilon))
+    offset = (1 - 2 * Y_train) * log_ratio
+    model = GLM(family="logistic", intercept=intercept, offset=offset).fit(
+        X_sel, Y_test
+    )
+    beta_est = model.beta_
+    conf_int = model.conf_int(X_sel, level=level)
+    length = conf_int[:, 1] - conf_int[:, 0]
+
+    beta_sel = GLM(family="logistic", intercept=intercept).fit(X_sel, mu).beta_
+
+    cover = (beta_sel >= conf_int[:, 0]) & (beta_sel <= conf_int[:, 1])
+    rejects = (0 < conf_int[:, 0]) | (0 > conf_int[:, 1])
+    return [
+        sum(cover),
+        sum(rejects),
+        sum(np.abs(beta_est - beta_sel)),
+        len(sel) + intercept,
+        sum(length),
+        ",".join(map(str, sel)),
+    ]
+
+
+def negbinom_thinning_si(
+    X, Y, mu, penalty, level, gamma, intercept, family, theta=None
+):
+    """Selective inference via NB data thinning (Dharamshi et al., Neufeld et al.).
+
+    Uses the convolution-closure property of the NB family.  If
+    Y_i ~ NB(mu_i, theta), draw
+
+      Y_thin[i] | Y[i]  ~  BetaBinomial(Y[i], epsilon*theta, (1-epsilon)*theta)
+      Y_train[i]         =  Y[i] - Y_thin[i]
+
+    giving independent halves Y_thin ~ NB(epsilon*mu, epsilon*theta) and
+    Y_train ~ NB((1-epsilon)*mu, (1-epsilon)*theta).  Both are then rescaled
+    by their respective epsilon factors to recover responses with mean mu,
+    so inference targets are identical to those of classic_si and no offset
+    adjustment is needed.
+
+    epsilon = gamma**2 / (1 + gamma**2) mirrors the thin_outcomes_si convention,
+    giving an information ratio inference:selection of gamma**2.
+    Both halves are rescaled by their epsilon factors to restore mean mu,
+    so no intercept offset adjustment is required and the intercept flag
+    is respected as-is.
+
+    When ``theta`` is ``None`` (the default), it is estimated from the full
+    data via an initial unpenalized (n > p) or penalized (n <= p) NB GLM
+    fit with IRLS, analogous to how ``thin_outcomes_si`` estimates the
+    working variance when ``Y_var`` is not supplied.  The estimated theta
+    is then used for all subsequent thinning and fitting steps.
+    """
+    from scipy.stats import betabinom as _betabinom
+
+    n, p = X.shape
+
+    # Estimate theta from the data if not provided
+    if theta is None:
+        if n > p:
+            theta = GLM(family="negative_binomial", intercept=True).fit(X, Y).theta_
+        else:
+            theta = (
+                GLM(family="negative_binomial", intercept=True, l1_penalty=penalty)
+                .fit(X, Y)
+                .theta_
+            )
+
+    epsilon = gamma**2 / (1 + gamma**2)
+    theta_thin = epsilon * theta
+    theta_train = (1 - epsilon) * theta
+
+    # Beta-Binomial thinning: Y_thin | Y ~ BetaBinomial(Y, epsilon*theta, (1-epsilon)*theta)
+    Y_int = np.round(Y).clip(min=0).astype(int)
+    Y_thin_raw = _betabinom.rvs(Y_int, theta_thin, theta_train).astype(float)
+    Y_train_raw = Y - Y_thin_raw
+
+    # Rescale each half to have mean mu (quasi-likelihood fit remains consistent)
+    Y_train = Y_train_raw / (1 - epsilon)
+    Y_thin = Y_thin_raw / epsilon
+
+    if penalty < 0:
+        penalty = select_lambda_by_mse_for_lasso(
+            "negative_binomial", X, Y_train, True, -1 * penalty
+        )
+
+    sel = (
+        GLM(family=family, l1_penalty=penalty, intercept=intercept)
+        .fit(X, Y_train)
+        .active()
+    )
+
+    if len(sel) == 0:
+        return [0, 0, 0, 0, 0, None]
+
+    X_sel = X[:, sel]
+    model = GLM(family=family, intercept=intercept).fit(X_sel, Y_thin)
+    beta_est = model.beta_
+    conf_int = model.conf_int(X_sel, level=level)
+    length = conf_int[:, 1] - conf_int[:, 0]
+
+    beta_sel = GLM(family=family, intercept=intercept, theta=theta).fit(X_sel, mu).beta_
+    cover = (beta_sel >= conf_int[:, 0]) & (beta_sel <= conf_int[:, 1])
+    rejects = (0 < conf_int[:, 0]) | (0 > conf_int[:, 1])
+    return [
+        sum(cover),
+        sum(rejects),
+        sum(np.abs(beta_est - beta_sel)),
+        len(sel) + intercept,
+        sum(length),
+        ",".join(map(str, sel)),
+    ]
 
 
 def thin_outcomes_si(
@@ -202,25 +571,28 @@ def thin_outcomes_si(
     error_model,
     true_sandwich=True,
     clusters=None,
+    glm_kwargs=None,
 ):
+    if glm_kwargs is None:
+        glm_kwargs = {}
+
+    # Use overdispersed variance for Poisson to account for extra-Poisson variation
+    # in the noise scaling; for other families the model variance is already adequate.
+    overdispersed = family == "poisson"
 
     if Y_var is not None:
         Y_var_noise = Y_var
     elif X.shape[0] > X.shape[1] + 1:  # n > p
         Y_var_noise = (
-            GLM(family=family, intercept=True)
+            GLM(family=family, intercept=True, **glm_kwargs)
             .fit(X, Y)
-            .get_var(X, Y, error_model, clusters=clusters)
+            .get_var(X, Y, error_model, clusters=clusters, overdispersed=overdispersed)
         )
     else:  # p > n
         Y_var_noise = (
-            GLM(
-                family=family,
-                intercept=True,
-                l1_penalty=penalty,
-            )
+            GLM(family=family, intercept=True, l1_penalty=penalty, **glm_kwargs)
             .fit(X, Y)
-            .get_var(X, Y, error_model, clusters=clusters)
+            .get_var(X, Y, error_model, clusters=clusters, overdispersed=overdispersed)
         )
 
     if clusters is not None:
@@ -228,34 +600,66 @@ def thin_outcomes_si(
     else:
         W *= np.sqrt(Y_var_noise)
 
+    if penalty < 0:
+        # penalty = select_lambda_by_mse_for_lasso(
+        #     family, X, Y + W * gamma, intercept, -1 * penalty
+        # )
+        penalty = select_lambda_lassocv(
+            X, Y + W * gamma, intercept, base_penalty=-1 * penalty
+        )
+
+    # Thinning with different noise
+    # n, p = X.shape
+    # if Y_var is not None:
+    #     mu_hat = mu
+    # elif n > p + 1:
+    #     mu_hat = GLM(family="logistic", intercept=True).fit(X, Y).predict(X)
+    # else:  # p > n
+    #     mu_hat = (
+    #         GLM(family="logistic", intercept=True, l1_penalty=penalty)
+    #         .fit(X, Y)
+    #         .predict(X)
+    #     )
+
+    # from scipy.stats import bernoulli
+
+    # W = bernoulli.rvs(mu_hat) - mu_hat
+
     sel = (
-        GLM(family=family, l1_penalty=penalty, intercept=intercept)
+        GLM(family=family, l1_penalty=penalty, intercept=intercept, **glm_kwargs)
         .fit(X, Y + W * gamma)
         .active()
     )
 
     if len(sel) == 0:
-        return [0, 0, 0, 0, 0, None]
+        return ([0, 0, 0, 0, 0, None], penalty)
     else:
         X_sel = X[:, sel]
-        model = GLM(family=family, intercept=intercept).fit(X_sel, Y - W / gamma)
+        model = GLM(family=family, intercept=intercept, **glm_kwargs).fit(
+            X_sel, Y - W / gamma
+        )
         beta_est = model.beta_
         if true_sandwich:
             conf_int = model.conf_int(X_sel, level=level, clusters=clusters)
         else:
             raise ValueError("not implemented")
         length = conf_int[:, 1] - conf_int[:, 0]
-        beta_sel = GLM(family=family, intercept=intercept).fit(X_sel, mu).beta_
+        beta_sel = (
+            GLM(family=family, intercept=intercept, **glm_kwargs).fit(X_sel, mu).beta_
+        )
         cover = (beta_sel >= conf_int[:, 0]) & (beta_sel <= conf_int[:, 1])
         rejects = (0 < conf_int[:, 0]) | (0 > conf_int[:, 1])
-        return [
-            sum(cover),
-            sum(rejects),
-            sum(np.abs(beta_est - beta_sel)),
-            len(sel) + intercept,
-            sum(length),
-            ",".join(map(str, sel)),
-        ]
+        return (
+            [
+                sum(cover),
+                sum(rejects),
+                sum(np.abs(beta_est - beta_sel)),
+                len(sel) + intercept,
+                sum(length),
+                ",".join(map(str, sel)),
+            ],
+            penalty,
+        )
 
 
 def thin_gradient_si(
@@ -483,7 +887,7 @@ def randomized_conditional_exact(
 
     if intercept:
         X = np.hstack([np.ones((X.shape[0], 1)), X])
-    n, p = X.shape
+    n, _ = X.shape
 
     if Y_var is not None:
         Y_var_noise = Y_var
@@ -516,24 +920,17 @@ def randomized_conditional_exact(
     perturb = gamma * X.T @ W  # they subtract the noise, loss is not scaled by 1/n
 
     if family == "linear":
-        conv = lasso.gaussian(
-            X,
-            Y,
-            penalty * n,
-            ridge_term=0.,
-            # randomizer_scale=hess,
-        )
+        loglike = rr.glm.gaussian(X, Y)
     elif family == "logistic":
-        conv = lasso.logistic(
-            X,
-            Y,
-            penalty * n,
-            ridge_term=0.,
-            # randomizer_scale=hess,
-        )
+        loglike = rr.glm.logistic(X, Y)
         dispersion = 1
     else:
         raise ValueError(f"Family {family} not supported")
+
+    # Build lasso directly so the randomizer covariance matches Cov(perturb) = hess.
+    # lasso.gaussian / lasso.logistic hardcode their own cov_rand (X.T@X or isotropic),
+    # which does not vary with gamma, causing CI widths to be insensitive to gamma.
+    conv = lasso(loglike, np.ones(X.shape[1]) * penalty * n, 0.0, _randomization2.gaussian(hess))
 
     signs = conv.fit(perturb=perturb, solve_args={"tol": 1.0e-8 * n, "min_its": 50})
     sel = np.where(signs != 0)[0]
@@ -549,12 +946,12 @@ def randomized_conditional_exact(
 
     result = conv.inference(target_spec, level=level)
 
-    # result = conv.summary(observed_target, 
-    #                       cov_target, 
-    #                       cov_target_score, 
+    # result = conv.summary(observed_target,
+    #                       cov_target,
+    #                       cov_target_score,
     #                       alternatives,
     #                       ndraw=5000,
-    #                       burnin=1000, 
+    #                       burnin=1000,
     #                       compute_intervals=True)
 
     beta_est = result["target"]
@@ -592,13 +989,12 @@ def run_simulation(
     error_model=None,
     misspecified=False,
     cluster_size=None,
+    discrete=False,
 ):
-    if family == "logistic":
-        inst = logistic_group_instance
-    elif family == "linear":
+    if family in ("logistic", "linear", "poisson", "negative_binomial"):
         inst = logistic_group_instance
     else:
-        raise ValueError("Unsupported family")
+        raise ValueError(f"Unsupported family: {family}")
 
     # signal = np.sqrt(signal_frac * 2 * np.log(p))
     if sparsity < 1:
@@ -606,22 +1002,41 @@ def run_simulation(
     else:
         sparsity = int(sparsity)
 
-    X, _, beta_true = inst(
-        n=n,
-        p=p,
-        signal=signal,
-        sgroup=sparsity,
-        groups=np.arange(p),
-        ndiscrete=0,
-        nlevels=5,
-        equicorrelated=False,
-        scale=True,
-        center=False,
-        rho=rho,
-        random_signs=True,
-    )[:3]
+    if discrete:
+        n_unique = 50
+        X, _, beta_true = inst(
+            n=n,
+            p=p,
+            signal=signal,
+            sgroup=sparsity,
+            groups=np.arange(p),
+            ndiscrete=0,
+            nlevels=5,
+            equicorrelated=False,
+            scale=True,
+            center=False,
+            rho=rho,
+            random_signs=True,
+        )[:3]
+        X = np.repeat(X[:n_unique], n // n_unique, 0)
+    else:
+        X, _, beta_true = inst(
+            n=n,
+            p=p,
+            signal=signal,
+            sgroup=sparsity,
+            groups=np.arange(p),
+            ndiscrete=0,
+            nlevels=5,
+            equicorrelated=False,
+            scale=True,
+            center=False,
+            rho=rho,
+            random_signs=True,
+        )[:3]
 
     Y_var = None
+    theta = None
     clusters = None
 
     if misspecified in ("mean", "both"):
@@ -641,6 +1056,44 @@ def run_simulation(
 
         if error_model == "clustered":
             raise ValueError("clusters not implemented for logistic")
+
+    elif family == "poisson":
+        if misspecified in ("var", "both"):
+            raise ValueError("Variance misspecification not implemented for Poisson")
+        if error_model == "clustered":
+            raise ValueError("Clustered errors not implemented for Poisson")
+        # mu was the linear predictor (possibly softplus-transformed for mean misspecification);
+        # apply the log link inverse to get Poisson means.
+        mu = np.exp(mu)
+        if dispersion > 1:
+            nb_disp = mu / (dispersion - 1)
+            lambda_i = np.random.gamma(shape=nb_disp, scale=1.0 / nb_disp)
+            Y = np.random.poisson(mu * lambda_i).astype(float)
+        else:
+            Y = np.random.poisson(mu).astype(float)
+        if true_noise_var:
+            # Poisson variance equals mean. Otherwise,
+            # the overdisped NB variance, mu + mu**2 / nb_disp.
+            Y_var = mu * dispersion
+
+    elif family == "negative_binomial":
+        if misspecified in ("var", "both"):
+            raise ValueError("Variance misspecification not implemented for NB")
+        if error_model == "clustered":
+            raise ValueError("Clustered errors not implemented for NB")
+        if dispersion <= 1:
+            raise ValueError("Dispersion parameter must be greater than 1")
+        # Log link: mu = exp(linear predictor)
+        mu = np.exp(mu)
+        # NB via Gamma-Poisson mixture (supports non-integer dispersion)
+        # Solve for: dispersion * mu = mu + mu**2 / np_disp
+        # nb_disp = np.mean(mu) / (dispersion - 1)
+        nb_disp = dispersion
+        lambda_i = np.random.gamma(shape=nb_disp, scale=1.0 / nb_disp)
+        Y = np.random.poisson(mu * lambda_i).astype(float)
+        if true_noise_var:
+            Y_var = mu + mu**2 / nb_disp  # NB variance
+            theta = nb_disp
 
     elif family == "linear":
         if misspecified in ("var", "both"):
@@ -675,11 +1128,13 @@ def run_simulation(
             Y = mu + errors
             if true_noise_var:
                 Y_var = np.ones(X.shape[0]) * dispersion
-    else:
-        raise ValueError("Unsupported family")
 
     # L1 penalty
     penalty = lam * np.sqrt(2 * np.log(p) / n) * np.std(Y)
+
+    # Family-specific extra kwargs forwarded to every GLM constructor
+    # glm_kwargs = {"theta": dispersion} if family == "negative_binomial" else {}
+    glm_kwargs = {"theta": None} if family == "negative_binomial" else {}
 
     # Store results
     results = {}
@@ -687,12 +1142,20 @@ def run_simulation(
     # ----- Classical -----
     try:
         results["classic"] = classic_si(
-            family, X.copy(), Y, mu, penalty, level, intercept, clusters=clusters
+            family,
+            X.copy(),
+            Y,
+            mu,
+            penalty,
+            level,
+            intercept,
+            clusters=clusters,
+            glm_kwargs=glm_kwargs,
         )
         TPR, FDR = selection_accuracy(
             ",".join(map(str, np.where(beta_true != 0)[0])), results["classic"][-1]
         )
-        results["classic"] += [TPR, FDR]  # placeholders for TPR, FDR
+        results["classic"] += [TPR, FDR]
     except Exception as e:
         print(f"Error in classic: {e}")
         results["classic"] = [None] * 8
@@ -704,16 +1167,15 @@ def run_simulation(
             X.copy(),
             Y,
             mu,
-            Y_var,
-            np.sqrt(1 + gamma) * penalty,
+            np.sqrt(1 + gamma**2) * penalty,
             level,
             gamma,
             intercept,
             clusters=clusters,
+            glm_kwargs=glm_kwargs,
         )
         if results["classic"][-1] is not None:
             TPR, FDR = selection_accuracy(
-                # results["classic"][-3]
                 ",".join(map(str, np.where(beta_true != 0)[0])),
                 results["sample_splitting"][-1],
             )
@@ -724,26 +1186,114 @@ def run_simulation(
         print(f"Error in sample_splitting: {e}")
         results["sample_splitting"] = [None] * 8
 
+    # ----- Logistic fission -----
+    # if family == "logistic":
+    #     try:
+    #         results["logistic_fission"] = logistic_fission_si(
+    #             X.copy(),
+    #             Y,
+    #             mu,
+    #             np.sqrt(1 + gamma**2) * penalty,
+    #             level,
+    #             gamma,
+    #             intercept,
+    #             Y_var is not None,
+    #         )
+    #         TPR, FDR = selection_accuracy(
+    #             ",".join(map(str, np.where(beta_true != 0)[0])),
+    #             results["logistic_fission"][-1],
+    #         )
+    #         results["logistic_fission"] += [TPR, FDR]
+    #     except Exception as e:
+    #         print(f"Error in logistic_fission: {e}")
+    #         results["logistic_fission"] = [None] * 8
+
+    # ----- Poisson thinning (exact for Poisson; misspecified but valid for NB) -----
+    if family in ("poisson", "negative_binomial"):
+        try:
+            results["poisson_thinning"] = poisson_thinning_si(
+                X.copy(),
+                Y,
+                mu,
+                np.sqrt(1 + gamma**2) * penalty,
+                level,
+                gamma,
+                intercept,
+            )
+            TPR, FDR = selection_accuracy(
+                ",".join(map(str, np.where(beta_true != 0)[0])),
+                results["poisson_thinning"][-1],
+            )
+            results["poisson_thinning"] += [TPR, FDR]
+        except Exception as e:
+            print(f"Error in poisson_thinning: {e}")
+            results["poisson_thinning"] = [None] * 8
+
+    # ----- NB thinning (exact for NB via Beta-Binomial splitting) -----
+    # if family == "negative_binomial":
+    if family in ("poisson", "negative_binomial"):
+        try:
+            results["negbinom_thinning"] = negbinom_thinning_si(
+                X.copy(),
+                Y,
+                mu,
+                np.sqrt(1 + gamma**2) * penalty,
+                level,
+                gamma,
+                intercept,
+                family,
+                theta,
+            )
+            TPR, FDR = selection_accuracy(
+                ",".join(map(str, np.where(beta_true != 0)[0])),
+                results["negbinom_thinning"][-1],
+            )
+            results["negbinom_thinning"] += [TPR, FDR]
+        except Exception as e:
+            print(f"Error in negbinom_thinning: {e}")
+            results["negbinom_thinning"] = [None] * 8
+
+    # ----- Binomial thinning (logistic + discrete flag only) -----
+    if family == "logistic" and discrete:
+        try:
+            results["binomial_thinning"] = binomial_thinning_si(
+                X.copy(),
+                Y,
+                mu,
+                np.sqrt(1 + gamma**2) * penalty,
+                level,
+                gamma,
+                intercept,
+            )
+            TPR, FDR = selection_accuracy(
+                ",".join(map(str, np.where(beta_true != 0)[0])),
+                results["binomial_thinning"][-1],
+            )
+            results["binomial_thinning"] += [TPR, FDR]
+        except Exception as e:
+            print(f"Error in binomial_thinning: {e}")
+            results["binomial_thinning"] = [None] * 8
+
     # ----- Thinning outcomes -----
     W = np.random.normal(0, 1, size=n)
     try:
-        results["thin_outcomes"] = thin_outcomes_si(
+        results["thin_outcomes"], penalty_learned = thin_outcomes_si(
             family,
             X.copy(),
             Y,
             mu,
             Y_var,
-            np.sqrt(1 + gamma) * penalty,
+            np.sqrt(1 + gamma**2) * penalty,
             level,
             gamma,
             W.copy(),
             intercept,
             error_model,
             clusters=clusters,
+            glm_kwargs=glm_kwargs,
         )
         if results["classic"][-1] is not None:
             TPR, FDR = selection_accuracy(
-                # results["classic"][-3]
                 ",".join(map(str, np.where(beta_true != 0)[0])),
                 results["thin_outcomes"][-1],
             )
@@ -762,7 +1312,7 @@ def run_simulation(
     #         Y,
     #         mu,
     #         Y_var,
-    #         np.sqrt(1 + gamma) * penalty,
+    #         np.sqrt(1 + gamma**2) * penalty,
     #         level,
     #         gamma,
     #         W.copy(),
@@ -783,7 +1333,8 @@ def run_simulation(
     #     results["thin_gradient"] = [None] * 8
 
     # ----- Randomized Conditional (Huang 2025) -----
-    if error_model == "clustered":
+    # RSC only supports linear and logistic families.
+    if error_model == "clustered" or family not in ("linear", "logistic"):
         return results
 
     try:
@@ -793,7 +1344,7 @@ def run_simulation(
             Y,
             mu,
             Y_var,
-            np.sqrt(1 + gamma) * penalty,
+            penalty_learned,  # output of score thinning, if CV
             level,
             gamma,
             W.copy(),
@@ -813,7 +1364,7 @@ def run_simulation(
     except Exception as e:
         print(f"Error in RSC: {e}")
         results["rsc"] = [None] * 8
-    
+
     # ----- Randomized Conditional Exact -----
     if error_model == "clustered" or family != "linear":
         return results
@@ -825,7 +1376,7 @@ def run_simulation(
             Y,
             mu,
             Y_var,
-            np.sqrt(1 + gamma) * penalty,
+            penalty_learned,  # output of score thinning, if CV
             level,
             gamma,
             W.copy(),
@@ -852,6 +1403,15 @@ def run_simulation(
 # %%
 def main(args):
     # encode hyperparameters into a filename
+
+    if args.epsilon:
+        # args.gamma = [np.round(eps / (1 - eps), 2) for eps in args.epsilon]
+        info_name = 'epsilon'
+        info_split = args.epsilon
+    else:
+        info_name = 'gamma'
+        info_split = args.gamma
+
     print(datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
     print(f"Arguements:, {args}")
     if args.cluster_size is not None:
@@ -862,10 +1422,11 @@ def main(args):
         clusters = [None]
     tag = (
         f"p={','.join(map(str,args.p))}_level={args.level}_n={','.join(map(str,args.n))}"
-        f"_reps={args.n_reps}_gamma={args.gamma}_s={','.join(map(str,args.sparsity))}"
+        f"_reps={args.n_reps}_{info_name}={','.join(map(str,info_split))}_s={','.join(map(str,args.sparsity))}"
         f"_lam={args.lam}_fam={args.family}_errors={args.error_model}_mis={args.misspecified}_cluster_size={cluster_label}"
         f"_signal={args.signal}"
         f"_dispersion={','.join(map(str,args.dispersion))}_true_noise_var={args.true_noise_var}"
+        f"_discrete={args.discrete}"
     )
     script_name = os.path.splitext(os.path.basename(__file__))[0]
     outfile = os.path.join(OUT_PATH, f"{script_name}_{tag}.csv")
@@ -873,18 +1434,21 @@ def main(args):
 
     first_write = True
     grid = list(
-        itertools.product(args.n, args.p, args.sparsity, args.dispersion, clusters)
-    )
-    for n, p, sparsity, dispersion, cluster_size in grid:
-        print(
-            f"Running: n={n}, p={p}, sparsity={sparsity}, dispersion={dispersion}, cluster_size={cluster_size}"
+        itertools.product(
+            args.n, args.p, args.sparsity, args.dispersion, info_split, clusters
         )
+    )
+    for n, p, sparsity, dispersion, info, cluster_size in grid:
+        print(
+            f"Running: n={n}, p={p}, sparsity={sparsity}, dispersion={dispersion}, {info_name}={info}, cluster_size={cluster_size}"
+        )
+
         results = Parallel(n_jobs=args.n_jobs, verbose=0)(
             delayed(run_simulation)(
                 n=n,
                 p=p,
                 family=args.family,
-                gamma=args.gamma,
+                gamma=np.sqrt(info / (1 - info)) if info_name == 'epsilon' else info,
                 sparsity=sparsity,
                 level=args.level,
                 signal=args.signal,
@@ -895,6 +1459,7 @@ def main(args):
                 error_model=args.error_model,
                 misspecified=args.misspecified,
                 cluster_size=cluster_size,
+                discrete=args.discrete,
             )
             for _ in range(args.n_reps)
         )
@@ -902,6 +1467,7 @@ def main(args):
             print(results)
             continue
 
+        HEADER[5] = info_name
         print(f"Writing to: {outfile}")
         for rep, res in enumerate(results):
             try:
@@ -917,6 +1483,7 @@ def main(args):
                                         p,
                                         sparsity,
                                         dispersion,
+                                        info,
                                         cluster_size,
                                         method,
                                     ]
@@ -940,7 +1507,14 @@ if __name__ == "__main__":
     parser.add_argument("--level", type=float, default=0.90)
     parser.add_argument("--n", type=int, nargs="+")
     parser.add_argument("--n_reps", type=int)
-    parser.add_argument("--gamma", type=float, default=1)
+    parser.add_argument("--gamma", type=float, default=[1], nargs="+")
+    parser.add_argument(
+        "--epsilon",
+        type=float,
+        default=None,
+        nargs="+",
+        help="Information fraction for inference",
+    )
     parser.add_argument("--sparsity", type=float, nargs="+")
     parser.add_argument("--signal", type=int, default=1)
     parser.add_argument("--lam", type=float)
@@ -954,31 +1528,11 @@ if __name__ == "__main__":
     parser.add_argument("--true_noise_var", default=False, action="store_true")
     parser.add_argument("--cluster_size", type=int, default=None, nargs="+")
     parser.add_argument("--debug", default=False, action="store_true")
+    parser.add_argument(
+        "--discrete",
+        default=False,
+        action="store_true",
+        help="Enable binomial data thinning for logistic family (groups by unique feature vector, splits via hypergeometric).",
+    )
     args = parser.parse_args()
     main(args)
-
-# else:
-#     args = argparse.Namespace(
-#         p = 40,
-#         level = 0.9,
-#         n = [100],
-#         n_reps = 4,
-#         gamma = 1,
-#         sparsity =5,
-#         lam =5,
-#         n_jobs =1,
-#         family ="logistic",
-#         verbose =True,
-#     )
-#     print(args)
-#     main(args)
-# p = 40
-# level = 0.90
-# n = [100, 200, 500, 1000]
-# n_reps = 16
-# gamma = 1
-# sparsity = 5
-# lam = 5
-# family = "logistic"
-
-# %%

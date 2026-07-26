@@ -28,6 +28,18 @@ ETA = X_INT @ BETA_TRUE
 PROBS = 1 / (1 + np.exp(-ETA))
 Y_BIN = RNG.binomial(1, PROBS).astype(float)
 
+# Poisson data (small coefficients to keep means well-behaved)
+BETA_POISSON = np.zeros(P + 1)
+BETA_POISSON[0] = 0.5   # intercept -> baseline mean ~1.6
+BETA_POISSON[1:4] = [0.3, -0.2, 0.2]
+MU_POISSON = np.exp(X_INT @ BETA_POISSON)
+Y_COUNT = RNG.poisson(MU_POISSON).astype(float)
+
+# Negative binomial data (same linear predictor as Poisson, theta=3)
+THETA_NB = 3.0
+_lambda_nb = RNG.gamma(shape=THETA_NB, scale=1.0 / THETA_NB, size=N)
+Y_NB = RNG.poisson(MU_POISSON * _lambda_nb).astype(float)
+
 # Cluster labels (15 clusters of 10)
 N_CLUSTERS = 15
 CLUSTER_SIZE = N // N_CLUSTERS
@@ -63,7 +75,38 @@ class TestFit:
 
     def test_unsupported_family_raises(self):
         with pytest.raises(ValueError):
-            GLM(family="poisson", l1_penalty=LAM).fit(X, Y_BIN)
+            GLM(family="gamma", l1_penalty=LAM).fit(X, Y_BIN)
+
+    def test_nb_fit_returns_self_with_theta(self):
+        glm = GLM(family="negative_binomial", l1_penalty=LAM, theta=THETA_NB)
+        assert glm.fit(X, Y_NB) is glm
+
+    def test_nb_fit_returns_self_without_theta(self):
+        # theta=None triggers IRLS estimation
+        glm = GLM(family="negative_binomial", l1_penalty=LAM)
+        assert glm.fit(X, Y_NB) is glm
+
+    def test_nb_beta_shape(self):
+        glm = GLM(family="negative_binomial", l1_penalty=LAM, theta=THETA_NB).fit(X, Y_NB)
+        assert glm.beta_.shape == (P + 1,)
+
+    def test_nb_theta_estimated_is_positive(self):
+        glm = GLM(family="negative_binomial", l1_penalty=LAM).fit(X, Y_NB)
+        assert glm.theta_ is not None
+        assert glm.theta_ > 0
+
+    def test_nb_theta_estimated_set_on_self(self):
+        glm = GLM(family="negative_binomial", l1_penalty=LAM).fit(X, Y_NB)
+        assert glm.theta == glm.theta_
+
+    def test_poisson_fit_returns_self(self):
+        glm = GLM(family="poisson", l1_penalty=LAM)
+        result = glm.fit(X, Y_COUNT)
+        assert result is glm
+
+    def test_poisson_beta_shape_with_intercept(self):
+        glm = GLM(family="poisson", l1_penalty=LAM).fit(X, Y_COUNT)
+        assert glm.beta_.shape == (P + 1,)
 
     def test_residuals_computed_after_fit(self):
         glm = GLM(family="linear", l1_penalty=LAM).fit(X, Y_LINEAR)
@@ -270,3 +313,177 @@ class TestGetVar:
         glm = GLM(family="linear", l1_penalty=LAM)
         with pytest.raises(AssertionError):
             glm.get_var(X, Y_LINEAR)
+
+
+# ---------------------------------------------------------------------------
+# Poisson GLM integration tests
+# ---------------------------------------------------------------------------
+
+class TestPoissonGLM:
+    def setup_method(self):
+        self.glm = GLM(family="poisson", l1_penalty=LAM).fit(X, Y_COUNT)
+
+    def test_predict_positive(self):
+        mu = self.glm.predict(X)
+        assert mu.shape == (N,)
+        assert np.all(mu > 0)
+
+    def test_conf_int_shape(self):
+        ci = self.glm.conf_int(X)
+        assert ci.shape == (P + 1, 2)
+
+    def test_conf_int_lower_leq_upper(self):
+        ci = self.glm.conf_int(X)
+        assert np.all(ci[:, 0] <= ci[:, 1])
+
+    def test_conf_int_beta_inside(self):
+        ci = self.glm.conf_int(X)
+        assert np.all(self.glm.beta_ >= ci[:, 0])
+        assert np.all(self.glm.beta_ <= ci[:, 1])
+
+    def test_conf_int_wider_at_higher_level(self):
+        ci_90 = self.glm.conf_int(X, level=0.90)
+        ci_99 = self.glm.conf_int(X, level=0.99)
+        assert np.all((ci_99[:, 1] - ci_99[:, 0]) >= (ci_90[:, 1] - ci_90[:, 0]))
+
+    def test_se_positive(self):
+        se = self.glm.se(X)
+        assert se.shape == (P + 1,)
+        assert np.all(se > 0)
+
+    def test_get_var_heterogeneous_positive(self):
+        var = self.glm.get_var(X, Y_COUNT, error_model="heterogeneous")
+        assert var.shape == (N,)
+        assert np.all(var > 0)
+
+    def test_active_indices_in_range(self):
+        active = self.glm.active()
+        assert np.all(active >= 0) and np.all(active < P)
+
+    def test_matches_direct_regreg_construction(self):
+        from m_estimation_SI.losses import poisson_loss_smooth
+        import regreg.api as rr
+        X_int = np.hstack([np.ones((N, 1)), X])
+        loss = poisson_loss_smooth(X_int, Y_COUNT)
+        penalty = rr.weighted_l1norm([0] + [1] * P, lagrange=LAM)
+        problem = rr.simple_problem(loss, penalty)
+        beta_direct = problem.solve(min_its=50, tol=1e-8)
+        assert np.allclose(self.glm.beta_, beta_direct)
+
+
+# ---------------------------------------------------------------------------
+# Negative Binomial GLM integration tests
+# ---------------------------------------------------------------------------
+
+class TestNegBinGLM:
+    def setup_method(self):
+        self.glm = GLM(
+            family="negative_binomial", l1_penalty=LAM, theta=THETA_NB
+        ).fit(X, Y_NB)
+
+    def test_predict_positive(self):
+        mu = self.glm.predict(X)
+        assert mu.shape == (N,)
+        assert np.all(mu > 0)
+
+    def test_conf_int_shape(self):
+        ci = self.glm.conf_int(X)
+        assert ci.shape == (P + 1, 2)
+
+    def test_conf_int_lower_leq_upper(self):
+        ci = self.glm.conf_int(X)
+        assert np.all(ci[:, 0] <= ci[:, 1])
+
+    def test_conf_int_beta_inside(self):
+        ci = self.glm.conf_int(X)
+        assert np.all(self.glm.beta_ >= ci[:, 0])
+        assert np.all(self.glm.beta_ <= ci[:, 1])
+
+    def test_conf_int_wider_at_higher_level(self):
+        ci_90 = self.glm.conf_int(X, level=0.90)
+        ci_99 = self.glm.conf_int(X, level=0.99)
+        assert np.all((ci_99[:, 1] - ci_99[:, 0]) >= (ci_90[:, 1] - ci_90[:, 0]))
+
+    def test_se_positive(self):
+        se = self.glm.se(X)
+        assert se.shape == (P + 1,)
+        assert np.all(se > 0)
+
+    def test_get_var_exceeds_poisson(self):
+        # NB variance > Poisson variance for any finite theta
+        var = self.glm.get_var(X, Y_NB, error_model="heterogeneous")
+        mu = self.glm.predict(X)
+        assert np.all(var > mu)
+
+    def test_active_indices_in_range(self):
+        active = self.glm.active()
+        assert np.all(active >= 0) and np.all(active < P)
+
+    def test_matches_direct_regreg_construction(self):
+        from m_estimation_SI.losses import negative_binomial_loss_smooth
+        import regreg.api as rr
+        X_int = np.hstack([np.ones((N, 1)), X])
+        loss = negative_binomial_loss_smooth(X_int, Y_NB, THETA_NB)
+        penalty = rr.weighted_l1norm([0] + [1] * P, lagrange=LAM)
+        problem = rr.simple_problem(loss, penalty)
+        beta_direct = problem.solve(min_its=50, tol=1e-8)
+        assert np.allclose(self.glm.beta_, beta_direct)
+
+    def test_large_theta_close_to_poisson(self):
+        # With huge theta, NB should give nearly the same fit as Poisson
+        glm_nb = GLM(family="negative_binomial", l1_penalty=LAM, theta=1e5).fit(X, Y_COUNT)
+        glm_p = GLM(family="poisson", l1_penalty=LAM).fit(X, Y_COUNT)
+        assert np.allclose(glm_nb.beta_, glm_p.beta_, atol=1e-3)
+
+
+# ---------------------------------------------------------------------------
+# NB IRLS (automatic theta estimation)
+# ---------------------------------------------------------------------------
+
+class TestNegBinIRLS:
+    """Tests for the two-step IRLS theta estimation path (theta=None)."""
+
+    def test_theta_stored_on_self(self):
+        glm = GLM(family="negative_binomial", l1_penalty=LAM).fit(X, Y_NB)
+        assert glm.theta == glm.theta_
+
+    def test_theta_positive(self):
+        glm = GLM(family="negative_binomial", l1_penalty=LAM).fit(X, Y_NB)
+        assert glm.theta_ > 0
+
+    def test_theta_in_plausible_range(self):
+        # True theta is THETA_NB=3; estimate should be in a wide but sane range
+        glm = GLM(family="negative_binomial", l1_penalty=LAM).fit(X, Y_NB)
+        assert 0.1 < glm.theta_ < 100
+
+    def test_theta_stored_as_scalar(self):
+        glm = GLM(family="negative_binomial", l1_penalty=LAM).fit(X, Y_NB)
+        assert np.isscalar(glm.theta_) or np.ndim(glm.theta_) == 0
+
+    def test_beta_same_shape_as_fixed_theta(self):
+        glm_est = GLM(family="negative_binomial", l1_penalty=LAM).fit(X, Y_NB)
+        glm_fix = GLM(family="negative_binomial", l1_penalty=LAM, theta=THETA_NB).fit(X, Y_NB)
+        assert glm_est.beta_.shape == glm_fix.beta_.shape
+
+    def test_conf_int_valid(self):
+        glm = GLM(family="negative_binomial", l1_penalty=LAM).fit(X, Y_NB)
+        ci = glm.conf_int(X)
+        assert ci.shape == (P + 1, 2)
+        assert np.all(ci[:, 0] <= ci[:, 1])
+
+    def test_loss_consistent_with_estimated_theta(self):
+        # loss_.theta should match the theta stored on self after fit
+        glm = GLM(family="negative_binomial", l1_penalty=LAM).fit(X, Y_NB)
+        assert np.isclose(glm.loss_.theta, glm.theta_)
+
+    def test_irls_improves_over_fixed_poisson(self):
+        # NB log-likelihood at the IRLS solution should be >= at the Poisson fit
+        from m_estimation_SI.losses import negative_binomial_loss_smooth
+        glm_nb = GLM(family="negative_binomial", l1_penalty=0).fit(X, Y_NB)
+        glm_p = GLM(family="poisson", l1_penalty=0).fit(X, Y_NB)
+        X_fit = np.hstack([np.ones((N, 1)), X])
+        loss_nb = negative_binomial_loss_smooth(X_fit, Y_NB, glm_nb.theta_)
+        # NB nll at NB solution <= NB nll at Poisson solution (NB MLE minimises NB loss)
+        f_nb = loss_nb.smooth_objective(glm_nb.beta_, mode="func")
+        f_p = loss_nb.smooth_objective(glm_p.beta_, mode="func")
+        assert f_nb <= f_p + 1e-6
